@@ -1,0 +1,549 @@
+# Greener on the Other Side: Design
+
+A 2-player meme game that takes an idiom literally. It is built to start a petty feud between two friends and keep you both busy with chores. A match takes about 11 minutes.
+
+## Decisions So Far
+
+- **Players:** 2, each on their own phone or computer. Practice mode pits you against a scripted bot neighbour, so you can play alone.
+- **Platform:** one web game built with Next.js. It runs in desktop browsers and phone browsers. There is no app store version.
+- **Rooms:** you start a room and send a friend the link or the 6-character code. There is no matchmaking with strangers.
+- **Realtime:** Pusher Channels is the only realtime service. The only server code is one tiny auth route that signs room joins.
+- **Length:** about 11 minutes per match. A match is best of 3 rounds. Each round is 3 minutes of play plus a 20s reveal, or 30s after the last round.
+- **Money:** free. No ads, no tip jar, no purchases.
+- **No accounts:** no sign-up, no leaderboards, no public counters.
+- **No saving:** nothing about a match is stored. Your browser remembers only your display name and a random player id.
+- **No shop:** no coins and no upgrades. Every round starts both lawns equal.
+- **Art style:** hand-drawn, scrappy meme look.
+- **Physics:** a small slide-and-arc step written for this game, with no physics library. Each browser simulates only its own garden.
+- **Scale:** small, for Ekansh and a few friends. Pusher's free plan allows about 55 full matches a day (see Build Notes).
+
+---
+
+## The Game
+
+**Pitch:** "Grow a better lawn than your neighbour in 3 minutes. Throw every weed, snail and gnome over the fence."
+
+**Story:** you and your neighbour both entered Best Kept Garden. Brenda from Number 7 judges in 3 minutes. Over the fence, their lawn looks perfect. It always does.
+
+### Goal
+
+- Win 2 of 3 rounds. Each round lasts 3 minutes.
+- When a round ends, Brenda scores both lawns by their true state. The better lawn wins the round.
+- You can't touch your neighbour's lawn. You can only throw things onto it.
+
+### Core Loop
+
+1. Throw the 3 gnomes standing on your lawn over the fence.
+2. Yank weeds and grab snails before they ruin a patch.
+3. Flick them over the fence onto your neighbour's lawn.
+4. Throw back whatever comes over from their side.
+5. Between throws, mow stripes and water brown patches.
+6. Turn the tap on and off, and empty the grass bag.
+7. In the last 40s, throw the gnome crate and the heavy junk.
+8. Watch Brenda peel the greener tint off both lawns.
+
+### Your Garden
+
+Your screen shows your own back garden, seen from your back door. Sizes below are in design units. The design is 680 units wide and 1,060 tall. From top to bottom:
+
+- **The top bar (96):** the clock, both names, round wins, **Shake Fist** and the menu.
+- **The peek strip (100):** the 4 rows of your neighbour's lawn nearest the fence, squashed with distance.
+- **The fence (40):** tall and the full width of the garden. The weathervane sits on top.
+- **Your lawn (640):** 12 columns by 16 rows, 192 patches. A patch is 50 wide and 40 deep, seen at a slant.
+- **The patio (184):** the tap, the can, the mower and its grass bag, the compost bin, the shed and Biscuit's bed.
+
+Hedges 40 units wide line both sides of the lawn. On a phone, nothing you can grab sits within 20 px of the screen's side edges, where the back swipe lives.
+
+Your neighbour sees the same layout, with your lawn in their peek strip. Their left is your right.
+
+Each patch tracks four things:
+
+- **Health:** 0 (mud) to 7 (lush). Every patch starts the round at 5.
+- **Length:** 0 to 3 (shaggy). Every patch starts at 2. Length 0 or 1 counts as short.
+- **Mess:** slime, trampling, a landing scuff, clippings, a wilted weed, a scalp mark or a mud puddle. Mowing the patch clears it.
+- **Hole:** dug by your dog. A hole stays until the round ends.
+
+Each patch dries by 1 health every 140s, or every 105s from 1:20 left. It grows 1 length every 75s, and mowing it restarts that timer. The timings are staggered per patch, so the lawn changes a patch at a time.
+
+Health shows in lightness and texture as well as colour. A lush patch has dense blades. A dry one has sparse blades and cracks. Mud has a puddle. So red-green colour blindness never hides a dry patch.
+
+### One Finger, Every Job
+
+The game follows one finger at a time. A second finger does nothing. After you lift, the next job needs a fresh touch. So phone and mouse players play by the same rules.
+
+Each press does one job until you let go. What sits under your finger picks the job, in this order:
+
+1. Biscuit while he circles a patch, the tap or the grass bag.
+2. A loose item, one falling over the fence, or one in Biscuit's mouth.
+3. A rooted weed or a snail.
+4. Grass. Move 12 px within the first 150 ms and you mow. Stay put and you water.
+
+- Grab reach is 22 px from a finger and 10 px from a mouse pointer. A larger item uses its drawn size. The nearest target wins.
+- The can tips during the 150 ms wait, so you see which job is starting.
+- A pour turns into mowing once your finger moves faster than 200 px/s for 100 ms. Mowing never turns into watering.
+- A press that moves faster than 1,000 px/s in its first 100 ms never mows. It grabs the nearest item within 44 px, or does nothing.
+
+### Letting Go
+
+One rule covers every release:
+
+- Throw speed is the peak finger speed in the last 100 ms before you let go, in screen pixels per second. The direction comes from the same moment. Touch and mouse use the same rule.
+- Let go at 400 px/s or faster, aimed within 60° of straight at the fence, and you throw. A throw inside that angle can still go wide into a hedge.
+- Let go slower, or aimed further off, and you put the item down where it is.
+- A press the phone cuts off, such as for an incoming call, always puts the item down.
+
+### On Screen
+
+- **Top bar:** your name, your rosettes, the clock, their rosettes, then their name. The clock sits in the middle and is the largest. Names shorten to 10 characters in the bar.
+- **Their status:** **Away** shows beside their name. **Gone 0:42** replaces their rosettes while it applies.
+- **Buttons:** the menu button sits at the left end of the top bar. **Shake Fist** sits at the right end, beside their name. Nothing you need to press sits under the top bar.
+- **In the scene:** the water level shows on the can, and the fill shows on the grass bag. Arm tiredness is a ring around the item you hold.
+- **Menu button:** Settings, How to Play and **Leave**. The menu reads "The round keeps going while this is open."
+- **Tips:** in round 1 of every match and in Practice, a one-line tip shows the first time each thing happens. **Hide Tips** turns them off until you reload.
+- **Phone sideways:** turning a phone sideways covers the game with "Turn your phone upright." The garden keeps running underneath. Desktop windows stay as they are.
+
+### Mowing
+
+- Press on grass and rub back and forth. The mower appears 30 units above your finger, so you can see the blades. It rolls back to the patio when you let go.
+- The mower is 1 patch wide. Each time it enters a patch, it cuts that patch to short: length 1, or 0 if it was already short. It restarts the patch's 75s growth timer.
+- One pass stripes a column for 75s. Two passes hold it for 150s.
+- A column shows a stripe once 14 of its 16 patches are short and clean. Clean means no mess, weed, hole, heap or item.
+- Stripes alternate light and dark by column on their own.
+- Mower speed is measured in screen pixels, like throws. From 1,000 px/s the mower shakes and sparks, as a warning. From 1,300 px/s it scalps: the patch loses 1 health and gets a scalp mark.
+- Every cut adds 1 to the grass bag, which holds 96 cuts. A full bag stops the mower, and it spits clippings onto the patch under it.
+- Mowing clears mess marks, including the scuffs your neighbour's throws leave. Mowing a clippings heap clears it a patch at a time, and each heap patch adds 6 cuts to your bag.
+
+### Watering
+
+- Press and hold still on grass. After 150 ms the can pours under your finger. Slide slowly to move the pour.
+- The pour covers a circle 120 units across. Each patch under it gains 1 health every 0.4s.
+- A full patch (7) sparkles. Pour on a sparkling patch for 1.5s more and it turns to mud: health 2, with a puddle.
+- The can holds 10s of pouring.
+- **The tap:** tap it once and it runs. The can fills in 3s while you keep playing. Tap it again to turn it off.
+- A tap left running for 8s floods the 2 patches nearest it to mud.
+- Pouring takes the can back from the tap, but the tap keeps running.
+- An empty can glugs and pours nothing. A toast says "The can's empty. Turn on the tap."
+
+### Throwing
+
+- Press on a weed, snail or piece of junk to grab it. A rooted weed needs a 60-unit pull before it comes out.
+- A held item stays within 100 units of where you grabbed it. For a yanked weed, that's 100 units from its root. Your finger can keep moving, and the throw launches from that spot.
+- Swipe toward the fence and let go. Swipe speed sets how far it flies, and swipe direction sets where.
+- Swipe speed is measured in screen pixels, so phones and monitors feel the same. A throw flies 0.4 units per px/s, so 1,500 px/s flies 600 units. Speeds over 2,500 px/s add nothing.
+- A throw must carry at least 15% of its distance past the fence. With no wind and a fresh arm, that means:
+  - About 1,500 px/s from the back row.
+  - About 650 px/s from the middle of the lawn.
+  - The slowest throw (400 px/s) from the front 5 rows.
+- A throw that reaches the fence without that 15% margin clips the top. It teeters there for 0.6s, on both screens, then drops back onto your front rows, across your stripes.
+- Shorter throws drop on your lawn. Throws that go wide hit a hedge and drop back.
+- A landing crushes the patch under it by 1 health and leaves a scuff mark. So a clipped throw costs you a stripe.
+- A throw long enough to cross their whole lawn bounces off their back wall onto their back row.
+- Your hand needs 0.4s between throws.
+- **Tired arm:** each throw fills the arm meter by 18%, or 45% for heavy junk. It drains 15% per second. Throws fly up to 40% shorter as it fills. A full meter means no throws for 1.5s.
+- **Catch:** press on something falling over the fence to catch it before it touches your grass. Throw it straight back.
+
+### Seeing Your Hits
+
+- Your neighbour's screen reports each landing in its next lawn update, within 1s.
+- A dust puff rises in your peek strip at that column, at the horizon if it landed further back. The thud sounds further away the deeper it landed.
+- A gnome or heavy hit pops their head up over the fence.
+- When their throw clips, you see it teeter on the fence top from your side too.
+- Heavy junk on their lawn always shows on the peek strip's horizon at its column, however deep it lies.
+
+### Chores
+
+- **Turn the tap on and off:** the can fills in 3s, and a tap left running floods your patio rows.
+- **Empty the grass bag:** every 96 cuts. Drag the bag onto the compost bin and hold it there for 1.5s. Or swipe the bag at the fence: their lawn gets a clippings heap that smothers 4 patches. Clip the fence and the heap bursts across your own front rows.
+- **Watch the dog:** tap Biscuit while he circles a patch, or he digs a hole in it. When he barks at an item, throw it before he fetches it.
+- **Re-mow:** grass grows back, and everything that lands leaves a mess mark.
+
+### Things That Go Wrong
+
+- **Weeds:** sprout on patches the round's seed picks. A rooted weed drains its patch by 1 health every 15s. Every 30s it spreads to a neighbouring patch. At most 40 weeds root at once.
+- **Yanked weeds wilt:** a weed wilts 20s after you pull it, wherever it lies. A wilted weed becomes a mess mark that mowing clears. It never roots again.
+- **Dandelions (rounds 2 and 3):** 1 weed in 4 is a dandelion. After 40s it turns into a seed clock. A seed clock bursts into 3 seeds wherever it touches the ground, and each seed roots as a weed after 10s. Yank one and drop it, and its seeds land around you. Throw it over the fence and it bursts on their side instead.
+- **Snails:** crawl in from a hedge at 10 units/s and cross the lawn to the other hedge, where they leave. They slime every patch they cross and eat 1 health every 8s from the patch they sit on. At most 12 crawl in a garden.
+  - A grabbed snail hides in its shell. A thrown snail comes out 3s after it lands and heads for the nearer hedge.
+- **Loose things:** anything loose lying on a patch takes 1 health from it every 10s.
+- **Biscuit, your dog:** helpful, in his own way.
+  - **Digs:** from 2:20 left, every 40s to 60s, he circles a patch 3 times, growling, for 2s. Tap him in time and he sits for 10s. Miss it and the patch becomes a hole.
+  - **Fetches:** from 2:20 left, he fetches any light item that lies untouched on your lawn for 3s. At 1.5s he barks and wags, as the warning, and trots over. Then he carries it straight back to your back row, proud, trampling up to 4 patches on the way.
+  - He fetches at most once every 20s. Press the item in his mouth to take it back. Tapping Biscuit himself does nothing while he fetches.
+- **Wind:** from 2:20 left, 6 gusts of 4s each round. Both gardens feel the same gust at the same moment. The weathervane on the fence swings 2s before a gust arrives.
+  - Over-fence gusts take turns. Each of you gets 2 tailwinds per round, and 1 of them falls in the last 40s. A coin flip picks who gets the first.
+  - A gust blowing over the fence toward your neighbour adds 30% to your throws and takes 30% off theirs.
+  - A gust along the fence pushes throws up to 150 units sideways. A throw aimed near a hedge ends up in it. Along-fence gusts take turns left and right.
+  - Gusts slide light things across the lawn: seed clocks, litter and snails in their shells. They also carry dandelion seeds over the fence.
+- **The greener tint:** it lies to you on purpose. See below.
+
+### The Last 40 Seconds
+
+At 0:40 the shed door bangs open. A crate of 12 gnomes tips across the back half of your lawn, and the heavy junk rolls onto your patio. Your mower becomes throwable too.
+
+| Junk | Footprint | When it lands on their lawn | Junk score |
+|---|---|---|---|
+| Garden gnomes, a crate of 12 | 1 patch each | Crushes its patch by 2 health | -1 each |
+| Wheelie bin | 2 by 2 patches | Crushes each patch by 2; the lid flies open and 4 pieces of litter spill out | -4 |
+| Your lawnmower | 2 by 2 patches | Crushes each patch by 2; it drives 4 patches in a crooked line, scalping each one | -4 |
+| Trampoline | 3 by 3 patches | Crushes each patch by 2. Anything landing on it later bounces back the way it came, at 90% speed | -6 |
+
+- The crate's gnomes count against you while they lie on your lawn. Get them over the fence.
+- Gnomes throw like weeds. The arm meter is all that stops you.
+- The bin, the mower and the trampoline are heavy. Lift one first: press and hold it for 0.6s, then swipe. Up to 12 px of wobble still counts as holding.
+- After a lift, only a throw works. Moving slowly sets it back down.
+- Heavy junk flies 40% shorter than a weed for the same swipe.
+- From the patio, heavy junk can't clear the fence. Drag it forward first: press it and slide without waiting. Dragging heavy junk flattens every patch it crosses by 1 health.
+- Heavy junk sinks in where it lands, on either lawn. Nobody can lift it again.
+- Heavy junk left on your own lawn at 0:00 counts against you.
+- Throw your mower and you can't mow for the rest of the round.
+- The trampoline cuts both ways. Throw it over, and your next gnome can bounce off it straight back onto your lawn.
+- Anything still in the air at 0:00 freezes mid-air and doesn't count.
+
+### The Greener Tint
+
+Both screens lie in the same direction, so you both feel behind all round.
+
+- Your own lawn is drawn 1 health level browner than it is, under a grey sky.
+- Their lawn in the peek strip is drawn greener, and the lie grows each round:
+  - **Round 1:** 2 levels greener, in sunshine, with a bird singing. The caption reads "Somehow greener."
+  - **Round 2:** 3 levels greener, under a rainbow. The caption reads "Still greener."
+  - **Round 3:** 4 levels greener, with a sprinkler running. The caption reads "Even greener. Somehow."
+- Their junk looks 30% smaller, because it's further away.
+- The sparkle on a full patch never lies. The brown tint tempts you to overwater, so the mud is your own fault.
+- No score shows during the round.
+
+### Brenda's Reveal
+
+At 0:00 both screens freeze, and Brenda arrives with her clipboard. The reveal runs 20s on the shared clock, so both screens play it in step.
+
+1. **0s to 2s:** "Time's up." The doorbell rings, and Brenda walks along the fence.
+2. **2s to 8s:** both lawns appear side by side, top-down, tinted the way you saw them all round. Brenda drags her clipboard across them, and the tint peels off like cling film. She peels your lawn first and theirs last. In the best rounds, the lawn next door turns out to be mud under a trampoline and 14 gnomes.
+3. **8s to 14s:** each lawn's score counts up: Green, Stripes, Tidy and Junk. Brenda gives one line per lawn.
+4. **14s to 17s:** she pins a rosette on the winner's gate, and the round score updates.
+5. **17s to 20s:** the next round's countdown.
+
+After the last round, the reveal runs 30s. Steps 1 to 4 stay the same. From 17s to 30s, Brenda walks home (see Ending), then the match result shows.
+
+Brenda picks her line from what she finds:
+
+| She finds | She says |
+|---|---|
+| 10 or more gnomes | "I count `gnome_count` gnomes. Are they breeding?" |
+| A trampoline | "Is that a trampoline?" |
+| 20 or more mud patches | "Lovely mud." |
+| 3 or more holes | "Something's been digging." |
+| All 12 stripes | "Proper stripes. Suspicious." |
+| Under 3 points between you | "Too close. I'm going with my gut." |
+
+**Your own fault:** each screen counts the damage you did to your own lawn. It tracks 6 kinds:
+
+- patches you drowned;
+- patches you scalped;
+- your fence clips;
+- patches you flattened by dragging;
+- your throws that bounced back;
+- holes from Biscuit taps you missed.
+
+Sometimes the loser's own damage is worth at least half the margin. Then Brenda names the biggest kind: "You lost by 4. You drowned 9 patches yourself." The same line shows under the loser's score.
+
+### Scoring
+
+Brenda scores each lawn from its true state. Both screens show the same numbers, because one screen does the counting (see Build Notes).
+
+- **Green, 50 points:** average patch health, scaled so a lawn of all 7s scores 50.
+- **Stripes, 30 points:** 2.5 points per striped column.
+- **Tidy, 20 points:** start at 20. Lose 0.5 per weed, snail, piece of litter, clippings heap patch or hole. Tidy never drops below 0.
+- **Junk, no limit:** lose 1 per gnome, 4 per wheelie bin or mower, and 6 per trampoline.
+
+Only things on lawn patches count. Your patio doesn't. Each line rounds to whole points, halves rounding up, and the total adds them up. A total can drop below 0. A fresh lawn scores 53: Green 36, Stripes 0, Tidy 20, and Junk -3 for the 3 starting gnomes.
+
+- **Tied round:** the greener lawn wins it. Equal Green too makes a drawn round that nobody wins.
+- **Match result:** the first to 2 round wins takes the match. After 3 rounds, more round wins takes it. Equal wins go to the higher points total across all rounds. Equal totals make a drawn match: "Brenda can't choose. She's calling the council."
+
+### Rounds and Escalation
+
+Each 3-minute round gets busier in four stretches:
+
+| Time left | Weeds sprout | Snails arrive | Each patch dries | New trouble |
+|---|---|---|---|---|
+| 3:00 to 2:20 | every 5s | every 15s | every 140s | 3 gnomes already stand on each lawn |
+| 2:20 to 1:20 | every 3.5s | every 10s | every 140s | Biscuit digs and fetches; wind gusts |
+| 1:20 to 0:40 | every 2.5s | every 7s | every 105s | faster drying |
+| 0:40 to 0:00 | every 4s | every 7s | every 105s | the shed opens; the clock ticks the last 10s |
+
+- **Every round** starts with 3 gnomes standing in the middle third of each lawn. The seed places them, and they stand on the same patches on both lawns. The first tip reads "Throw the gnome over the fence."
+- **Round 1:** as in the table. Its second weed sprouts on the back row at 2:50 left, so the first hard throw comes early.
+- **Round 2:** adds dandelions.
+- **Round 3:** a heatwave. Grass dries 2.5 times as fast all round, and the can takes 6s to fill.
+
+Both gardens get the same weeds and snails at the same times and patches, from the round's shared seed. Any difference comes from your play and from what you throw.
+
+### Why It Makes You Angry
+
+Every fail traces back to something you did. The game warned you, and you were busy.
+
+- A soft swipe clips the fence top and drops your snail back onto your own stripes.
+- You throw from the back row with a tired arm, and it falls short.
+- You ignore the swinging weathervane, and a headwind turns a good throw into a clip.
+- The brown tint makes you overwater, and the patch turns to mud. It was sparkling.
+- You leave the tap running, and it floods the patches beside it.
+- You rub too fast, and the mower scalps your best stripe.
+- You swipe the full grass bag at the fence, clip it, and clippings bury your front rows.
+- You miss Biscuit's bark, and he trots their gnome through your stripes.
+- You drag the wheelie bin forward to throw it, and flatten a path through your lawn.
+- You throw your trampoline over, and your next gnome bounces off it, back onto your lawn.
+- You throw your mower, and then the grass grows.
+- You didn't tap Biscuit in time.
+
+### Petty Comedy
+
+- When their throw comes over, their head pops up over the fence where it left their hand.
+- When your gnome or heavy junk lands on their lawn, their head pops up too.
+- When your throw clips, a smug "heh heh heh" floats over the fence.
+- Biscuit trots their gnome to your back door, tail wagging, straight through your stripes.
+- **Shake Fist** pops your fist up over their fence, at most once every 3s.
+- A thrown mower keeps mowing their lawn when it lands, badly.
+- The wheelie bin lid flies open and spreads a week of rubbish. That's a crisp packet, a pizza box, a banana skin and one sock.
+
+### Room Flow
+
+1. **Home:** the title, the pitch and a name box. The box starts with a random funny name, such as "Gnome Hoarder", so you can start at once. The buttons are **Start a Room**, **Join With Code** and **Practice Alone**.
+2. **Names:** 1 to 16 characters as they show on screen. Letters in any script, digits, spaces, apostrophes, dots and hyphens are fine, with at least 1 letter or digit. Extra spaces are trimmed. The box checks as you type and says "Use letters, numbers, spaces, apostrophes, dots or hyphens."
+3. **Start a Room:** makes a random 6-character code. Codes use 31 letters and digits, skipping 0, o, 1, l and i. The lobby opens at a link like `/r/k7dm2q`.
+4. **Share:** the lobby shows the code in big capitals in a clear font, grouped as K7D M2Q. **Copy Link** confirms with a "Link copied" toast. **Share Link** opens the phone's share menu, and hides where the browser can't share. If copying fails, the link shows as text you can select. Under the buttons: "Come back here after you send it."
+5. **Join:** your friend opens the link, or taps **Join With Code** and types the code.
+   - The code box ignores case, shows capitals and turns off autocorrect. It joins on the 6th valid character.
+   - A code with a character outside the alphabet shows "Codes are 6 characters with no 0, O, 1, L or I."
+   - Pasting a whole link into the box works too.
+   - A room link with capitals switches to lowercase. A link with a bad code shows "That link isn't a room."
+6. **Lobby:** two garden gates, one per player, each with a name and a **Ready** button. A 3-line how-to sits underneath. **Ready** is a toggle. The phone stays awake in the lobby.
+7. **Countdown:** once both players are Ready, a 3s countdown runs on the shared clock: "3, 2, 1, Mow!"
+8. **Rounds:** 3 minutes of play, then Brenda's reveal, which ends with the next round's countdown. Nobody presses Ready between rounds.
+9. **Match end:** the result, both true lawns, your worst-moment replay and the share card. The buttons are **Rematch** and **Leave**.
+10. **Rematch:** once both players press it, a new match starts after the 3s countdown, with a new seed.
+11. **Leave:** back to the home screen. Leaving mid-match asks "Leave the match? Your neighbour wins." Your neighbour sees "neighbour_name stormed off. You win." and returns to the lobby, where they can wait for anyone with the link.
+12. **Back:** during a match, the browser's Back button or a back swipe opens the same "Leave the match?" question instead of leaving.
+
+**Practice Alone** needs no name.
+
+A room exists only as a Pusher channel, so any valid code opens a lobby. The room's screens:
+
+| State | You see | Buttons |
+|---|---|---|
+| Connecting | "Opening the garden gate…" | **Leave** |
+| No connection after 8s | "Can't reach the garden. Check your signal or play Practice Alone." | **Try Again**, **Practice Alone** |
+| Alone, you started the room | The code and "Send the link to your neighbour." | **Copy Link**, **Share Link**, **Leave** |
+| Alone, you arrived by link | "Waiting for your neighbour. Keep this page open." | **Leave** |
+| Alone, you typed a code | "Nobody's here yet. Check the code with your friend." | **Leave** |
+| Both here | Both gates | **Ready**, **Leave** |
+| You're Ready | "Waiting for neighbour_name to press Ready." | **Not Ready**, **Leave** |
+| They're Ready | Their gate reads Ready, and your **Ready** button pulses | **Ready**, **Leave** |
+| Countdown | "3, 2, 1, Mow!" | none |
+| Your connection drops | A **Reconnecting…** banner over the running garden | none |
+| They pressed Leave mid-match | "neighbour_name stormed off. You win." Then the lobby | **Back to Lobby** |
+| Walkover | "neighbour_name didn't come back. You win." | **Back to Lobby**, **Leave** |
+| You came back after a walkover | "You didn't come back in time. neighbour_name wins." | **Back to Lobby**, **Leave** |
+| No contest | "The line went dead. Nobody wins." | **Rematch**, **Leave** |
+| You pressed Rematch | "Waiting for neighbour_name." | **Leave** |
+| They pressed Rematch | "neighbour_name wants a rematch." | **Rematch**, **Leave** |
+| They left after the match | "neighbour_name left." | **Back to Lobby**, **Leave** |
+| Room Full | "Two people are already here. If one is you, close the other tab or app." | **Try Again**, **Start a Room**, **Practice Alone** |
+| Open in another tab | "This room is open in another tab." | **Play Here**, **Leave** |
+| Moved to another tab | "This game moved to another tab." | **Leave** |
+| Bad link | "That link isn't a room." | **Start a Room** |
+
+Accessibility:
+
+- Screen readers read the room code letter by letter.
+- A polite live region announces "neighbour_name joined", "neighbour_name is ready" and "neighbour_name left".
+- Once pressed, **Ready** reads **Not Ready**, and screen readers hear the waiting line with it.
+- Enter submits the name and code boxes. Focus moves to the heading of each new screen.
+- Pinch zoom works on menus and the lobby. Only the game canvas blocks it.
+
+### Drops, Reloads and Gatecrashers
+
+- **Your neighbour goes quiet:** after 3s with nothing from them in a round, or 6s outside one, their name shows **Away**. Your garden keeps running, and so does the clock. Your throws vanish over the fence while they're Away.
+- **Silence counts only while you can hear:** their silence counts only while your own tab is showing and connected. When your tab comes back or your connection returns, the count restarts, and your screen says hello again.
+- **Your neighbour drops:** when they leave the room's member list, their name shows **Gone** with a 60s countdown. Their last lawn update stays in the peek strip.
+- **They come back within 60s:** play carries on.
+- **They don't come back:** you win the match as a walkover. If they return later, they see the result.
+- **The line goes dead:** they stay in the member list, but nothing arrives for 60s. The match ends as a no contest. This covers a Pusher outage, where both screens go quiet at once.
+- **A round ends while they're Away or Gone:** Brenda gives an Away neighbour 6s to send their final. Without it, or once they're Gone, she scores their last update caught up to 0:00, like a reload. Both screens show that lawn. When the host was gone, its page judges that round once it returns. It rebuilds its own lawn from the guest's copy and catches it up to the round's end, like a reload during that reveal.
+- **A reload or an app switch mid-round:** your garden comes back from your neighbour's last copy of it. Your bag, can, tap, arm meter and own faults come back as they were. Everything you missed then happens at once: drying, growth, weeds, snails and holes. A reload never rescues a bad lawn, and it never wipes a good one. With no copy to use, you get a fresh lawn plus everything you missed.
+- **A reload in the lobby or during a reveal:** you rejoin at the same step, and Ready resets. A reloaded host gets back the verdicts it missed from the guest, so both reveals and match ends match.
+- **Both of you reload mid-match:** neither page holds the match any more. After 5s you both land in the lobby.
+- **Backgrounding the tab:** the round clock keeps going, and so does your garden. A hidden desktop tab still sends your lawn every 1s, so you never show Away. Throws still land on you. A hidden phone tab freezes and drops its connection, so throws sent at you meanwhile are lost. When you come back, your garden catches up at once to where it would be.
+- **Your own connection drops:** a **Reconnecting…** banner shows, and your garden keeps running. Throws wait up to 6s for the connection. Older ones vanish over the fence.
+- **A third person opens the link:** they see **Room Full** and leave the room at once, so they cost no messages. The two seats go to the first two players who meet in the lobby. A seat frees up only when its player presses **Leave**, or stays out of the room for 10s outside a match. During a match the seats stay locked, even while one player is Gone. After a walkover, the absent player's seat stays locked while the winner's screen shows the result.
+- **A second tab of yours:** the same room in a second tab of your browser shows "This room is open in another tab." **Play Here** moves the game to the new tab.
+
+### Practice
+
+**Practice Alone** plays a full match against Mr Pemberton, a scripted bot neighbour. It needs no connection and sends nothing to Pusher, so it works when the day's quota runs out. It still runs through the same room code as online play, with Mr Pemberton on the other end.
+
+- He plays by the same rules, with the same seeded weeds, snails and gnomes.
+- **Round 1, polite:** he only throws back what you send him, 4s to 8s later. His watering makes up 60% of his drying, and he mows a column every 12s. Tips show you how to grab, throw, mow, water and do both chores.
+- **Round 2, normal:** he throws back within 2s to 6s. He also sends his own weeds and snails every 5s to 9s. 1 throw in 5 clips the fence and drops on his side. He says "Blast." His watering makes up all of his drying, and he mows a column every 6s.
+- **Round 3, petty:** he throws back within 1.5s and empties his whole shed at 0:40, heavy junk first. 1 light throw in 13 clips the fence. His watering makes up 130% of his drying, and he mows a column every 6s.
+- He always waters his driest patches first.
+- **His reactions:** his head pops up with "My begonias!" when a gnome lands in his front 4 rows. He shakes his fist after 3 hits within 10s. He laughs at your clips.
+- Tuning target: you beat polite Pemberton on your first try. Once you know the game, you beat petty Pemberton about half the time. Rounds simulated without a screen, with scripted players on both sides, check both targets.
+- Brenda's reveal, the replay and the share card work as they do online.
+
+### Length
+
+- Lobby: about 1 minute.
+- Each round: 3 minutes of play plus Brenda's 20s reveal. The last reveal runs 30s.
+- A 3-round match: about 11 minutes. A 2-0 match: about 8 minutes.
+- A rematch adds 8 to 11 minutes.
+
+### Ending
+
+After the last reveal, Brenda pins the Best Kept Garden rosette on the winner's gate. She walks home across her own perfect lawn. It squeaks. It's plastic. Caption: "It was never greener."
+
+### Shareable Moments
+
+- **The tint peel:** the lawn you envied all round is mud under a wheelie bin, a trampoline and 30 gnomes.
+- **The share card:** both true lawns side by side, both names and "It was never greener." It lists four stats: the match score, your last lawn score, gnomes on your lawn and your fence clips.
+- **Worst-moment replay:** a 3s slow-motion replay of the moment that cost you the most health. It's labelled "Clipped the fence. Again." or "Bounced off your own trampoline."
+- **The trampoline bounce:** a last-second trampoline throw that sends your own gnome straight back over the fence.
+
+### Controls
+
+| Action | Phone | Desktop |
+|---|---|---|
+| Grab and throw | Press the item, swipe toward the fence and let go | Click the item, drag toward the fence and release while moving |
+| Put an item down | Let go slowly, or swipe away from the fence | Release slowly |
+| Yank a weed | Press it and pull, then swipe | Click it and pull, then drag and release |
+| Catch | Press something falling over the fence | Click it |
+| Lift heavy junk | Press and hold 0.6s until it lifts, then swipe | Click and hold, then drag and release |
+| Drag junk forward | Press it and slide at once | Click it and drag at once |
+| Mow | Press grass and rub back and forth | Click grass and drag back and forth |
+| Water | Press and hold still on grass; slide slowly | Click and hold still on grass; move slowly |
+| Turn the tap on or off | Tap the tap | Click the tap |
+| Empty the grass bag | Drag the bag onto the compost bin and hold, or swipe it at the fence | The same, with the mouse |
+| Stop Biscuit digging | Tap Biscuit while he circles | Click Biscuit |
+| Take back a fetch | Press the item in Biscuit's mouth | Click it |
+| Shake Fist | Tap the fist button | Click the fist button, or press F |
+| Menu and Leave | Tap the menu button, or go Back | Click the menu button, or press Escape |
+
+### Build Notes
+
+#### Who Simulates What
+
+- Each browser is the only authority for its own garden. That covers the grass grid, weeds, snails, loose items, Biscuit, the patio, the arm meter and the garden's lawn report.
+- No object is ever simulated on both machines, so the two simulations never need to match.
+- A thrown item changes hands once, at the fence. The thrower's browser removes it when it crosses the fence line above fence height. Then it sends one `throw` message.
+- The receiver mirrors the item left to right and spawns it above its own screen top. It runs the rest of the flight.
+- A clip sends a small clip record the same way, so the receiver can draw the teeter. The item stays with the thrower.
+- Wind comes from the round seed and the shared clock. Both browsers compute the same gusts with no messages. Gust directions are defined from the host's side, and the guest reverses both.
+- Weeds, snails, gnome spots and Biscuit's digs come from the round seed too, so both gardens get the same ones.
+- Every scheduled event comes from the seed by its own index, not from a shared random stream. So a garden can jump forward to any time and get the same lawn it would have reached live.
+- Messages give positions in lawn units, measured from the fence, never in pixels. Phone and desktop layouts never need to match.
+
+#### The Room Channel
+
+- Each room is one Pusher presence channel: `presence-lawn-` plus the room code, such as `presence-lawn-k7dm2q`. Every game message is a client event on it.
+- The auth route signs a join with your player id and name. Pusher attaches your player id to every event you send, and receivers trust only that id.
+- **Seats:** the first two player ids to meet in the lobby take the seats. Each player's `sync` lists them. A newcomer who finds 2 other players already listed sees **Room Full** at once. One who finds 1 player waits up to 3s for that player's `sync`.
+- **Host:** the seated player with the lower id. Seats and host stay fixed for the whole match, through reloads and blips.
+- The page opens the Pusher connection only in a room. It closes it on **Leave**, on **Room Full** and in another-tab cases. Practice never opens one.
+- The connection, the second-tab lock and the local test channel are created once per room code, outside React's page setup. They close on **Leave** or when the page closes for good.
+- **Start:** the host sends one `start` per match. It holds the match id, the seed, the start time, the round length and the reveal length, after `?fast`. Each round's seed and start time follow from it, so no per-round message can go missing.
+- **Clock sync:** the host's own clock is the reference. The guest sends 5 pings at join, keeps the shortest round trip and rejects any over 400 ms. Pings skip the outbox. One more ping runs at each reveal and counts only if its round trip is at most 1.5 times the best. A host reload needs no resync.
+- **Freshness:** every message bundle carries a session id, the match id, the round number and a sequence number. Session ids grow over time. Receivers keep the newest session per player and drop older sessions, other matches and finished rounds.
+- **Repeats instead of one-offs:** while both players are present outside a round, each sends a `sync` every 2s. Ready and Rematch travel inside it. Every `hello` gets a `sync` back, stating the match phase, including a walkover.
+- **Results:** the host decides every round. It scores both lawns from their `final` messages, its own included. A missing guest final is replaced by the guest's lawn rebuilt to 0:00, which travels in the `result`. Then it sends `result` with both scores, the winner and the match tally. The guest re-sends its `final` every 1s while the host is in the room, until the `result` arrives. Each result applies once per match and round.
+- **Mending results:** the guest's `sync` names the round it still waits on, with its copy of the host's lawn from that round. A host back from a closed page builds its lawn for that round from the copy, then judges it. A host that reloaded asks in its `sync` for the verdicts it lacks, and the guest sends them back.
+- A Web Lock per room stops a second tab of the same browser. The `?local` dev mode gives each tab its own player id, kept across reloads of that tab.
+
+#### Messages
+
+| Message | Sent when | Size | Events per second, per player |
+|---|---|---|---|
+| `lawn` | every 1s during a round, even when nothing changed | under 600 bytes | 1 |
+| `throw` | items or clips cross the fence, batched | about 70 bytes per item, up to 8 items | 0 to 2.5, about 0.5 on average |
+| `final` | at 0:00; the guest repeats it every 1s while the host is in the room, until the result arrives | under 1 KB | 1 to 3 per round |
+| `result` | the host, once both finals are in or 6s have passed, and again for each repeated `final`; the guest, for a reloaded host that asks | under 1.5 KB, or 1.8 KB with the guest's final | 1 per round |
+| `start` | the host, once per match | under 200 bytes | rare |
+| `sync` | every 2s outside rounds while both are present, and in reply to each `hello` | under 400 bytes, 1 KB with a copy of your lawn, 1.5 KB with a waiting round's copy too | 0.5 outside rounds |
+| `hello` | page load, tab shown again, connection back | under 150 bytes | rare |
+| `fist` | Shake Fist | under 60 bytes | at most 0.33 |
+| `leave` | **Leave** pressed | under 60 bytes | rare |
+| `ping`, `pong` | 5 at join, 1 per reveal; they skip the outbox | under 100 bytes | rare |
+
+- `lawn` packs 1 byte per patch: 3 bits of health, 2 bits of length and 3 bits for what's on top. The top is clean, mess, puddle, weed, item, heap, hole or heavy junk. That's 192 bytes, about 256 characters in base64.
+- `lawn` and `final` both carry per-type counts: weeds, snails, gnomes, litter, heap patches, bins, mowers and trampolines. So a lawn update scores exactly like a final, and no item cap can change Tidy.
+- `lawn` also carries markers: up to 24 items in the peek strip's rows, and every piece of heavy junk at any depth. It lists up to 8 landings since the last update, each 2 bytes: the patch and the item type.
+- `lawn` also carries your 6 own-fault counts and your chores: bag cuts, can level, the tap and the arm meter. A rebuild after a reload restores them all.
+- `final` carries the 6 own-fault counts for Brenda's line too. It also has a 2-byte marker for every item, so the reveal can draw both true lawns. Snails mid-crawl and seed clocks count like any other item.
+- `result` carries the host's own `final`, so the guest can draw the host's true lawn too.
+- A `throw` is dropped when its id was seen before, or when it was sent over 6s ago. Throw ids join the session id and a counter.
+- Pusher never echoes your own events, so your browser applies its own actions at once.
+- Players ignore events from anyone but the other seated player.
+
+#### Hiding Lag in the Arc
+
+- Every arc peaks at least 250 units high. Even a short lob from the front row rises out of view.
+- A throw that clears the fence is still climbing. Its peak sits above the top of both screens for about 400 ms.
+- After the hand-off, the thrower's screen draws the item rising out of view for up to 300 ms. That drawing has no simulation behind it.
+- Each `throw` carries the moment the item crossed the fence, on the shared clock. The receiver fast-forwards the flight by the time since then, capped at 300 ms. With 50 to 200 ms of delay, the item is still out of view when it appears.
+- A throw that arrives over 300 ms late enters at the screen top with its remaining motion. It lands late but never jumps.
+- A lost `throw` message makes one item vanish over the fence. The next `lawn` update corrects the peek strip within 1s.
+
+#### Rate Budget
+
+The Pusher rules in ARCHITECTURE.md set the budget. Pusher allows at most 10 client events per second per connection. Each event counts as 2 messages in a 2-player room, against 200,000 messages a day.
+
+- Every send goes through a coalescing outbox capped at 6 events per second. It flushes at most every 167 ms and packs everything pending into one event, split at 3.5 KB.
+- A send limiter under the outbox allows at most 9 events in any second, pings included.
+- The 0.4s hand recovery caps throws at 2.5 a second. So a player peaks at 3.8 events per second: 1 `lawn`, 2.5 `throw` batches and 0.33 `fist`.
+- One round costs about 270 events per player, so about 540 per room.
+- A 3-round match, with the lobby and reveals, costs about 1,800 events. That's about 3,600 counted messages.
+- 200,000 messages a day covers about 55 full matches.
+- A room averages about 6 counted messages per second during a round and peaks near 15.
+- The free plan's 100 connections allow 50 rooms at once. 50 busy rooms would use up the day's quota in about 11 minutes. That suits a few friends, not a public launch.
+- These limits cover the whole Pusher account. Another app on the same account shares them; only a separate account would not.
+- Practice and the `?local` dev transport send nothing to Pusher.
+
+#### Phone Performance
+
+- No physics library. Rooted weeds, crawling snails and Biscuit are drawings that follow scheduled paths.
+- Loose items use a small slide-and-friction step. They collide only with the hedges, the fence and the back wall, never with each other. Resting items skip the step.
+- Thrown items fly a fixed arc that the game computes. Trampoline landings use a footprint check.
+- A garden holds at most 160 loose items. Past that, the oldest loose weed wilts at once.
+- The lawn draws from a cached layer and repaints one row when a patch in it changes. Items draw as cached stamps. The peek strip repaints when a `lawn` update arrives, once a second.
+- The garden is a 680 by 1,060 unit portrait design, fitted to the screen. On desktop, the shed and more hedge fill the spare width.
+- On an iPhone SE in Safari, 375 by 548 px are visible. A patch is 26 by 21 px, and the top bar is 50 px tall.
+- Target: 60 fps on a mid-range phone with 30 gnomes, a trampoline and a wheelie bin's litter on the lawn.
+
+#### Trust and Security
+
+- Each browser reports its own lawn, so a player with devtools can fake a perfect one. That's acceptable among friends.
+- The Pusher secret stays on the server, in the auth route. No browser ever signs its own join.
+- The auth route signs only valid room channels, player ids and names. A room channel is `presence-lawn-` plus 6 lowercase letters or digits. It checks names with the same rule as the name box.
+- Anyone with the link can still join a room and spend the shared quota. Players ignore events from non-players, Room Full visitors leave at once, and the risk stays accepted for a friends-only game.
+
+#### Settings and Build Order
+
+- Settings offers sound, volume and Reduced Motion. Reduced Motion turns off screen shake and turns the tint peel into a fade. Assist Mode and sensitivity stay off, since both players must play by the same rules.
+- The game never asks for motion access.
+- Build the fence hand-off between two tabs over the `?local` transport first. Then add real Pusher rooms, then each mechanic.
+- Cut order if time runs short: the mower's landing run, dandelions, catching, Shake Fist, then the heatwave.
+
+---
+
+## Shared Foundation
+
+The game builds on these blocks in `src/shared`, and adds its own networking.
+
+- **Real-time timers:** each timer stores its finish time on the shared clock. It stays accurate while the tab sits in the background.
+- **Keep the screen awake:** the game asks the phone not to sleep in the lobby and during a match.
+- **Leave warning:** on desktop, closing the tab mid-match asks first. Phone browsers don't reliably show this prompt, so Back opens the game's own question instead.
+- **Controls:** the pointer tracker follows one finger, with hand-off to a resting finger turned off. Hold meters drive watering and heavy lifts. Throw speed comes from this game's own release sampler.
+- **Sound:** synthesised effects. Throws go `whoosh`, the trampoline goes `boing`, and Biscuit barks.
+- **Fail replays and share cards:** the worst-moment replay and the end-of-match card.
+- **Layout:** React draws menus, the lobby and the HUD. A canvas draws the gardens and Brenda's reveal, and React mirrors her verdict as text for screen readers.
+- **Scrappy look:** lines wobble like a felt-tip pen, so no art library is needed. Static art sits in cached layers.
+- **New for this game:** the network layer, the room flow, the grass grid, the slide-and-arc step, the fence hand-off and the bot.
+- **Not used:** Matter.js, phone motion, coins, upgrades and the chore board's blocking rules. A 3-minute round has no room for a shop.

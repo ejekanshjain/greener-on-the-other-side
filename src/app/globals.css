@@ -1,0 +1,17 @@
+@import '../shared/styles.css';
+@source '..';
+
+/* Your Ready button pulses while your neighbour waits for you. */
+@keyframes ready-pulse {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    transform: scale(1.08) rotate(-2deg);
+  }
+}
+
+.ready-pulse {
+  animation: ready-pulse 0.9s ease-in-out infinite;
+}
