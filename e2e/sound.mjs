@@ -2,9 +2,9 @@
 // hosts. Nothing plays before the first tap, even through a countdown. After one real
 // click, a round on page A plays every sound in PLAN.md's sound map, each logged through
 // events(): throws, landings (on grass, on mud and next door), the clip's creak and their
-// laugh, pops, the snail's squish, mowing with a scalp, pouring, an empty can, the tap and
-// its flood, a sparkle, Biscuit, the vane and wind, the shed and a trampoline that sinks,
-// Shake Fist, the last 10s, Brenda's reveal and the next countdown. A real click on Shake
+// laugh, pops, the snail's squish, mowing with a scalp, a new stripe's chime, pouring, an
+// empty can, the tap and its flood, a sparkle, Biscuit, the vane and wind, the shed and a
+// trampoline that sinks, Shake Fist, the last 10s, Brenda's reveal and the next countdown. A real click on Shake
 // Fist pops a fist on page B within 300 ms, and the button rests for 3s. Phone sizes tap
 // Shake Fist by touch and take screenshots of the top bar.
 //
@@ -47,6 +47,7 @@ const MAP = [
   'hammer',
   'tick',
   'doorbell',
+  'stripe',
   'scrub',
   'bell'
 ]
@@ -245,6 +246,33 @@ async function desktop(browser) {
   await mouseFlick(a, top, bottom, 1500, { holdMs: 160 })
   await hear(la, 'rumble', 'mowing')
   await hear(la, 'rattle', 'scalp')
+
+  // A slow real rub down another clear column stripes it, with its own chime.
+  const clear = await dev(
+    a,
+    (g, used) => {
+      const garden = g.garden()
+      const busy = new Set([
+        used,
+        ...garden.weeds.map(w => w.patch % 12),
+        ...garden.snails.map(s => Math.floor(s.lx / 50)),
+        ...garden.items.map(i => Math.floor(i.lx / 50))
+      ])
+      const c = [5, 6, 4, 7, 2, 9, 1, 10].find(c => !busy.has(c))
+      // Holes stay all round, so this column starts without any.
+      for (let row = 0; row < 16; row++) g.setPatch(row * 12 + c, { hole: 0 })
+      return c
+    },
+    col
+  )
+  await mouseFlick(
+    a,
+    await dev(a, (g, c) => g.toClient(c * 50 + 25, 45), clear),
+    await dev(a, (g, c) => g.toClient(c * 50 + 25, 668), clear),
+    600,
+    { holdMs: 0 }
+  )
+  await hear(la, 'stripe', 'a new stripe')
 
   // A snail grabbed by a real press squishes into its shell.
   await dev(a, g => g.spawn('snailShell', 64))

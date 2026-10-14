@@ -1,4 +1,4 @@
-import { HEALTH_MAX, PATCH_D, PATCH_W } from '../game/tuning'
+import { HEALTH_MAX, PATCH_D, PATCH_W, SHORT_MAX } from '../game/tuning'
 import { Mess, type ItemKind } from '../game/types'
 import { hash01 } from '../shared/math'
 import { palette } from '../shared/palette'
@@ -375,7 +375,7 @@ export interface PatchLook {
   length: number
   mess: number
   hole: boolean
-  /** 0 for no stripe, 1 for a light stripe, 2 for a dark one. */
+  /** 0 for no stripe, or which of the stripe's two alternating shades. */
   stripe: 0 | 1 | 2
   /** Your own lawn sits under a grey sky. */
   grey: boolean
@@ -384,8 +384,8 @@ export interface PatchLook {
 /**
  * Paints one patch at design (x, y), 50 by 40, without drawing outside it: a base colour
  * by level, blades by health and length, cracks at level 2 or less, a mess mark, a hole,
- * the stripe overlay and the grey wash. Lightness and texture both change with health, so
- * levels read without colour vision.
+ * the stripe overlay or short mow lines on a cut patch, and the grey wash. Lightness and
+ * texture both change with health, so levels read without colour vision.
  */
 export function paintPatch(
   ctx: CanvasRenderingContext2D,
@@ -415,6 +415,8 @@ export function paintPatch(
   if (look.mess !== Mess.none) paintMess(ctx, x, y, index, look.mess)
   if (look.hole) paintHole(ctx, x, y, index)
   if (look.stripe) paintStripe(ctx, x, y, look.stripe)
+  else if (look.length <= SHORT_MAX && !look.hole)
+    paintMowLines(ctx, x, y, index)
   if (look.grey) {
     ctx.fillStyle = 'rgba(96, 102, 112, 0.14)'
     ctx.fillRect(x, y, PATCH_W + 0.5, PATCH_D + 0.5)
@@ -593,7 +595,35 @@ function paintHole(
   ctx.fill()
 }
 
-/** A mown stripe: a light or dark wash with fine parallel lines, so it reads without colour. */
+/**
+ * A cut patch's short mow lines, until it grows long again: three pale strokes along the
+ * mowing direction.
+ */
+function paintMowLines(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  index: number
+): void {
+  ctx.strokeStyle = 'rgba(236, 255, 206, 0.72)'
+  ctx.lineWidth = 2.4
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  for (let k = 0; k < 3; k++) {
+    const lx = x + 9 + k * 16 + hash01(index, 500 + k) * 4
+    const ly = y + 5 + hash01(index, 510 + k) * 14
+    ctx.moveTo(lx, ly)
+    ctx.lineTo(lx, ly + 15)
+  }
+  ctx.stroke()
+  ctx.lineCap = 'butt'
+}
+
+/**
+ * A mown stripe: a wash in one of two shades with fine parallel lines, so it reads without
+ * colour. Both shades are lighter and greener than unstriped grass at the same health,
+ * so neither reads as dead grass.
+ */
 function paintStripe(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -601,9 +631,13 @@ function paintStripe(
   stripe: 1 | 2
 ): void {
   const light = stripe === 1
-  ctx.fillStyle = light ? 'rgba(255, 255, 230, 0.16)' : 'rgba(0, 30, 0, 0.14)'
+  ctx.fillStyle = light
+    ? 'rgba(190, 250, 110, 0.34)'
+    : 'rgba(165, 235, 95, 0.24)'
   ctx.fillRect(x, y, PATCH_W + 0.5, PATCH_D + 0.5)
-  ctx.strokeStyle = light ? 'rgba(255, 255, 230, 0.35)' : 'rgba(0, 30, 0, 0.3)'
+  ctx.strokeStyle = light
+    ? 'rgba(215, 255, 160, 0.5)'
+    : 'rgba(200, 250, 150, 0.36)'
   ctx.lineWidth = 1
   ctx.beginPath()
   for (let lx = x + 5; lx < x + PATCH_W; lx += 8) {
@@ -652,6 +686,12 @@ export function paintScenery(ctx: CanvasRenderingContext2D): void {
     sketchCircle(ctx, 18, y + 18, 26, { ...HEDGE, seed: 100 + y })
     sketchCircle(ctx, DESIGN_W - 18, y + 18, 26, { ...HEDGE, seed: 200 + y })
   }
+  paintPatioPaving(ctx)
+  paintPatioProps(ctx)
+}
+
+/** The patio's slabs and its edge line, with no props. The yard paints its strip with it. */
+export function paintPatioPaving(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = '#d9d1bf'
   ctx.fillRect(0, PATIO.y, DESIGN_W, PATIO.h)
   for (let row = 0; row < 3; row++) {
@@ -661,7 +701,6 @@ export function paintScenery(ctx: CanvasRenderingContext2D): void {
     }
   }
   sketchLine(ctx, 0, PATIO.y, DESIGN_W, PATIO.y, INK_THIN)
-  paintPatioProps(ctx)
 }
 
 // ---------------------------------------------------------------- Patio

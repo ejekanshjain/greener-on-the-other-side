@@ -1,5 +1,6 @@
-// `bun run balance [seeds]`: plays seeded bot rounds headless and checks the M27 targets
-// in PLAN.md. Each pairing plays `seeds` rounds (200 by default) per round it covers.
+// `bun run balance [seeds] [family]`: plays seeded bot rounds headless and checks the M27
+// and M37 targets in PLAN.md. Each pairing plays `seeds` rounds (200 by default) per round
+// it covers.
 import { simulateRound, type SimRound } from '../src/game/headless'
 import { matchTimings } from '../src/game/match'
 import {
@@ -8,31 +9,45 @@ import {
   type FinalePlan,
   type Profile
 } from '../src/game/profiles'
-import { Top, patchTop } from '../src/game/report'
+import {
+  Top,
+  patchLength,
+  patchTop,
+  type FinalReport
+} from '../src/game/report'
 import { scoreLawn } from '../src/game/score'
-import { PATCHES } from '../src/game/tuning'
+import { COLS, PATCHES, ROWS, SHORT_MAX, STRIPE_MIN } from '../src/game/tuning'
 
 const SEEDS = Number(process.argv[2] ?? 200)
 /** A second argument picks another family of seeds, to check a result isn't luck. */
 const FAMILY = Number(process.argv[3] ?? 0)
 const { roundMs } = matchTimings(false)
 
-/** The expert's two finale plans: throw everything over, or throw gnomes then mow. */
-const THROWER: Profile = {
+/** The expert's three finale plans. The closer is the expert's own. */
+const plan = (name: string, finale: FinalePlan): Profile => ({
   ...PLAYERS.expert,
-  name: 'thrower',
-  finale: { gnomes: 'throw', gapMs: 0, junk: true, mowAfter: false }
-}
-const MOWER: Profile = {
-  ...PLAYERS.expert,
-  name: 'mower',
-  finale: {
-    gnomes: 'throw',
-    gapMs: 0,
-    junk: false,
-    mowAfter: true
-  } satisfies FinalePlan
-}
+  name,
+  finale
+})
+/** Throws its heavy junk while the arm is fresh, then every gnome. */
+const THROWER = plan('thrower', {
+  gnomes: 'throw',
+  gapMs: 0,
+  junk: true,
+  mower: 'junk',
+  mowAfter: false,
+  closeMs: 0
+})
+/** Throws its gnomes, mows once they're gone, and only mows from 0:15 left. */
+const MOWER = plan('mower', {
+  gnomes: 'throw',
+  gapMs: 0,
+  junk: false,
+  mower: 'keep',
+  mowAfter: true,
+  closeMs: 15_000
+})
+const CLOSER: Profile = { ...PLAYERS.expert, name: 'closer' }
 
 /** Plays `SEEDS` rounds of `round` between `a` (host) and `b`, swapping sides on odd seeds when `swap`. */
 function play(
@@ -113,6 +128,36 @@ check(
   pct(throwerWins),
   throwerWins >= 0.35 && throwerWins <= 0.65
 )
+const closerThrower = [0, 1, 2].flatMap(round =>
+  play(THROWER, CLOSER, round, true)
+)
+const throwerCloser = winShare(closerThrower)
+check(
+  'A finale thrower beats a closer in 35% to 65% of rounds',
+  pct(throwerCloser),
+  throwerCloser >= 0.35 && throwerCloser <= 0.65
+)
+const closerMower = [0, 1, 2].flatMap(round => play(MOWER, CLOSER, round, true))
+const mowerCloser = winShare(closerMower)
+check(
+  'A finale mower beats a closer in 35% to 65% of rounds',
+  pct(mowerCloser),
+  mowerCloser >= 0.35 && mowerCloser <= 0.65
+)
+
+type Runs = { sim: SimRound; aHosts: boolean }[]
+/** The lawns `a` ended each round with (`a` is the first profile of `play`). */
+const lawnsOf = (runs: Runs, side: 'a' | 'b'): FinalReport[] =>
+  runs.map(({ sim, aHosts }) => sim.finals[aHosts === (side === 'a') ? 0 : 1])
+const stripesOf = (final: FinalReport) => scoreLawn(final).stripes
+const mowerLawns = [...lawnsOf(finale, 'b'), ...lawnsOf(closerMower, 'a')]
+const mowerStriped =
+  mowerLawns.filter(final => stripesOf(final) > 0).length / mowerLawns.length
+check(
+  'A finale mower holds a striped column at 0:00 in at least half its rounds',
+  pct(mowerStriped),
+  mowerStriped >= 0.5
+)
 
 // Lawns at 0:00 from the regular rounds, both sides.
 const lawns = regulars.flatMap(({ sim }) => sim.finals)
@@ -165,6 +210,65 @@ const holes = (i: number) => {
 }
 console.log(
   `regular lawns at 0:00, medians: green ${part(i => scores[i]?.green ?? 0)}, stripes ${part(i => scores[i]?.stripes ?? 0)}, tidy ${tidy}, junk ${part(i => scores[i]?.junk ?? 0)}, total ${part(i => scores[i]?.total ?? 0)}; weeds ${part(i => lawns[i]?.counts.weeds ?? 0)}, snails ${part(i => lawns[i]?.counts.snails ?? 0)}, litter ${part(i => lawns[i]?.counts.litter ?? 0)}, heaps ${part(i => lawns[i]?.counts.heaps ?? 0)}, holes ${part(holes)}, gnomes ${part(i => lawns[i]?.counts.gnomes ?? 0)}`
+)
+const closerLawns = [
+  ...lawnsOf(closerThrower, 'b'),
+  ...lawnsOf(closerMower, 'b')
+]
+console.log(
+  `median Stripes at 0:00: regular ${median(lawns.map(stripesOf))}, mower ${median(mowerLawns.map(stripesOf))}, closer ${median(closerLawns.map(stripesOf))}`
+)
+
+/**
+ * Why the finale mower's unstriped columns failed at 0:00. Each patch that keeps a column
+ * from striping gets one reason, worst first: sunk junk, a hole, something covering it, a
+ * mark, then long grass. A failed column takes the reason most of its bad patches share.
+ */
+const failed = { long: 0, marked: 0, covered: 0, holed: 0, sunk: 0 }
+type Why = keyof typeof failed
+for (const final of mowerLawns) {
+  // Heavy junk still lying covers its middle patch; the rest of a heavy footprint sank.
+  const lyingHeavy = new Set(
+    final.markers.filter(m => !m.sunk).map(m => m.patch)
+  )
+  for (let c = 0; c < COLS; c++) {
+    const tally = { long: 0, marked: 0, covered: 0, holed: 0, sunk: 0 }
+    let bad = 0
+    for (let i = c; i < PATCHES; i += COLS) {
+      const byte = final.patches[i] as number
+      const top = patchTop(byte)
+      const why: Why | null =
+        top === Top.heavy
+          ? lyingHeavy.has(i)
+            ? 'covered'
+            : 'sunk'
+          : top === Top.hole
+            ? 'holed'
+            : top === Top.weed || top === Top.item || top === Top.heap
+              ? 'covered'
+              : top === Top.mess || top === Top.puddle
+                ? 'marked'
+                : patchLength(byte) > SHORT_MAX
+                  ? 'long'
+                  : null
+      if (!why) continue
+      tally[why]++
+      bad++
+    }
+    if (bad <= ROWS - STRIPE_MIN) continue
+    let main: Why = 'long'
+    for (const why of Object.keys(tally) as Why[])
+      if (tally[why] > tally[main]) main = why
+    failed[main]++
+  }
+}
+const failedTotal = Object.values(failed).reduce((x, y) => x + y, 0)
+console.log(
+  `the mower's unstriped columns at 0:00 (${(failedTotal / mowerLawns.length).toFixed(1)} a round), by main reason: ${(
+    Object.entries(failed) as [Why, number][]
+  )
+    .map(([why, n]) => `${why} ${pct(n / Math.max(1, failedTotal))}`)
+    .join(', ')}`
 )
 console.log(
   `${SEEDS} seeds per pairing and round in ${((performance.now() - started) / 1000).toFixed(1)}s`

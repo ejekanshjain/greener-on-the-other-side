@@ -1,11 +1,12 @@
 // M13 grass bag, compost and heaps, on two ?local pages at three sizes. The bag tip shows
-// at 80 cuts. A real press drags the bag onto the compost and holds it there until it
+// at 80 cuts in round 2, never in round 1. A real press drags the bag onto the compost and holds it there until it
 // empties. A real swipe from the patio heaps the other lawn, which shows in the thrower's
 // peek strip. Exact swipes check the two acceptance speeds: 1,900 px/s heaps the other
 // lawn and 1,700 px/s clips and heaps your own front rows. Mowing a heap clears it.
 import {
   dev,
   dragHold,
+  frames,
   launch,
   localPair,
   mouseFlick,
@@ -13,12 +14,14 @@ import {
   sleep,
   startMatch,
   touchFlick,
+  waitFor,
   waitForNotice
 } from './lib.mjs'
 
 const BAG = { lx: 220, ly: 744 }
 const COMPOST = { lx: 360, ly: 706 }
 const HEAP = 8
+const BAG_TIP = 'Bag nearly full. Compost it or swipe it over.'
 
 /** Waits until a dev query on `page` returns something truthy, or throws `why`. */
 async function until(page, fn, arg, why, timeout = 4000) {
@@ -47,13 +50,23 @@ const client = (page, p) => dev(page, (g, p) => g.toClient(p.lx, p.ly), p)
 
 async function run(browser, size) {
   const touch = size !== 'desktop'
-  const { a, b, check, context } = await localPair(browser, { size })
+  const { a, b, check, context } = await localPair(browser, {
+    size,
+    // A new player's tips, so the bag tip shows.
+    query: 'first=1'
+  })
   await startMatch(a, b)
 
-  // 1. Crossing 80 cuts shows the bag tip.
+  // 1. Crossing 80 cuts in round 1 shows no bag tip: that lesson waits for round 2.
   await dev(a, g => g.act.setBag(76))
+  const highAt = await now(a)
   await dev(a, g => g.act.mowColumn(5))
-  await waitForNotice(a, 'Drag the bag to the compost, or over the fence.')
+  await event(a, 'bagHigh', highAt, `${size}: no bagHigh at 80 cuts`)
+  await sleep(1500)
+  const early = (await dev(a, g => g.events(120))).filter(
+    e => e.type === 'note' && e.detail.text === BAG_TIP
+  )
+  if (early.length) throw new Error(`${size}: the bag tip showed in round 1`)
 
   // 2. Drag the bag onto the compost bin and hold it there until it empties.
   await dev(a, g => g.act.setBag(90))
@@ -177,6 +190,17 @@ async function run(browser, size) {
   console.log(
     `${size}: mowing cleared 2 heap patches; the bag holds ${after.mower.bag}`
   )
+  // 7. In round 2, crossing 80 cuts shows the bag tip.
+  const host = (await dev(a, g => g.state().role)) === 'host' ? a : b
+  await dev(host, g => g.jump(120_000, 1))
+  await waitFor(a, s => s.matchPhase?.round === 1, { label: 'round 2' })
+  await frames(a)
+  await dev(a, g => g.act.setBag(76))
+  await dev(a, g => g.act.mowColumn(7))
+  // Biscuit's urgent tips can cut in ahead of it.
+  await waitForNotice(a, BAG_TIP, 15_000)
+  await shot(a, `bag-${size}-tip`)
+  console.log(`${size}: the bag tip showed in round 2, not round 1`)
   check()
   await context.close()
 }

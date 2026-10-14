@@ -44,6 +44,7 @@ import { TopBar } from './TopBar'
 import { TurnUpright } from './TurnUpright'
 import { useAudioUnlock } from './useAudioUnlock'
 import { Verdict } from './Verdict'
+import { Yard } from './Yard'
 
 const useLocal = process.env.NODE_ENV !== 'production' && netFlags.local
 
@@ -208,6 +209,11 @@ export default function RoomScreen({
   const inMatch = view.phase === 'match' && view.admission === 'seated'
   const matchId = inMatch ? (view.match?.id ?? null) : null
   const decided = view.results.some(r => r.over)
+  const tipsChoice = useStore(session.hud, s => s.tips)
+  const yardOpen = useStore(session.hud, s => s.yard !== null)
+  const yardHelp = useStore(session.hud, s => s.yard?.help === true)
+  const tipsOn =
+    tipsChoice === 'on' || (tipsChoice === 'auto' && view.firstMatch)
   // The menu and the leave question belong to one match, so they close when it ends.
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [leaveFor, setLeaveFor] = useState<string | null>(null)
@@ -217,6 +223,19 @@ export default function RoomScreen({
   }
   useBackGuard(inMatch, askLeave)
   useLeaveWarning(inMatch && !decided)
+  // A starting match removes the lobby card or the yard, How to Play included, so focus
+  // moves to the menu button instead of falling back to the page.
+  useEffect(() => {
+    if (!matchId || yardOpen) return
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement
+      if (active && active !== document.body) return
+      document
+        .querySelector<HTMLElement>('[data-testid="menu-button"]')
+        ?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [matchId, yardOpen])
   useEffect(() => {
     const keys = new Keyboard()
     keys.onPress('Escape', () => {
@@ -233,10 +252,19 @@ export default function RoomScreen({
     const scene = new GardenScene(viewport, session.neighbour)
     const reveal = new RevealScene(viewport, session.play)
     if (netFlags.cvd) canvas.style.filter = `url(#${CVD_FILTER_ID})`
-    const press = new PressController(canvas, viewport, () =>
-      session.playableGarden()
+    const press = new PressController(
+      canvas,
+      viewport,
+      () => session.inputGarden(),
+      () => session.paused
     )
     const stopEvents = session.onGardenEvents(events => scene.onEvents(events))
+    const stopStripes = session.onStripes((gained, lost) =>
+      scene.stripeChange(gained, lost)
+    )
+    // Your first press stops the ghost finger's second play.
+    const stopGhost = () => session.stopGhost()
+    canvas.addEventListener('pointerdown', stopGhost)
     // The replay records the design from the peek strip to the patio's edge; its crop
     // changes only on resize.
     let crop = replayCrop(viewport)
@@ -253,8 +281,10 @@ export default function RoomScreen({
       render: (_alpha, timeMs) => {
         const started = MEASURE ? performance.now() : 0
         scene.setInfo({ round: session.gardenRound, debug: netFlags.debug })
+        scene.pointer = session.shownTip?.target ?? null
+        scene.ghost = session.ghost
         scene.draw(session.garden, timeMs, press.view, session.clock.now())
-        if (session.playableGarden()) {
+        if (session.playableGarden() && !session.paused) {
           const at = MEASURE ? performance.now() : 0
           if (session.worst.capture(canvas, crop, timeMs) && MEASURE)
             meters.capture.add(performance.now() - at)
@@ -283,6 +313,8 @@ export default function RoomScreen({
       stopLoop()
       stopCrop()
       stopEvents()
+      stopStripes()
+      canvas.removeEventListener('pointerdown', stopGhost)
       press.dispose()
       scene.dispose()
       reveal.dispose()
@@ -301,10 +333,13 @@ export default function RoomScreen({
       )}
       <Countdown session={session} />
       {view.phase === 'match' && <Verdict session={session} view={view} />}
+      {/* In the yard, the patio's lines sit on its panel's top edge. */}
       {view.admission === 'seated' && view.conn === 'reconnecting' ? (
-        <Reconnecting box={box} />
+        <Reconnecting box={box} raised={yardOpen} />
       ) : (
-        view.phase === 'match' && <Notice session={session} box={box} />
+        (view.phase === 'match' || (yardOpen && !yardHelp)) && (
+          <Notice session={session} box={box} raised={yardOpen} />
+        )
       )}
       {inMatch && box.left >= 180 && (
         <p
@@ -315,12 +350,14 @@ export default function RoomScreen({
         </p>
       )}
       <RoomPanel session={session} view={view} code={code} />
+      {yardOpen && <Yard session={session} view={view} box={box} />}
       <MatchEnd session={session} view={view} />
       <Menu
         open={matchId !== null && menuFor === matchId}
         onClose={() => setMenuFor(null)}
         onLeave={askLeave}
-        onHideTips={session.tipsHidden ? undefined : () => session.hideTips()}
+        tipsOn={tipsOn}
+        onTips={() => (tipsOn ? session.hideTips() : session.showTips())}
       />
       <LeaveDialog
         open={matchId !== null && leaveFor === matchId}

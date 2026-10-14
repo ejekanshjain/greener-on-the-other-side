@@ -42,7 +42,8 @@ import {
 } from './heavy'
 import { ITEM_LIFT, ITEM_RADIUS } from './items'
 import { createMower, mowTo, parkMower, type Mower, type MowEvent } from './mow'
-import type { Release } from './press'
+import { towardFence, type Release } from './press'
+import { lying } from './report'
 import {
   isDandelion,
   newWeed,
@@ -84,6 +85,7 @@ import {
 import {
   BAG_LIFT_MIN,
   BAG_POS,
+  BLOCKED_CUTS,
   BIN_POS,
   BIN_ROLL,
   CATCH_RADIUS_SCALE,
@@ -120,6 +122,7 @@ import {
   SEED_FLY_SPREAD,
   SEED_ROOT_MS,
   SHELL_MS,
+  SHORT_MAX,
   SKID_SHARE,
   SLIDE_DECAY,
   SLIDE_STOP,
@@ -158,6 +161,20 @@ export type GardenCommand =
   | { type: 'grabBag'; lx: number; ly: number }
   | { type: 'hold'; lx: number; ly: number }
   | { type: 'release'; release: Release }
+  /**
+   * A fast flick that started on grass at (lx, ly), with the finger now at (toX, toY): it
+   * grabs the nearest light thing within `reach` units, or misses. `near` is the reach
+   * the miss reports a thing within, in lawn units.
+   */
+  | {
+      type: 'snap'
+      lx: number
+      ly: number
+      toX: number
+      toY: number
+      reach: number
+      near: number
+    }
   | { type: 'arrive'; arrival: Arrival; ffMs: number }
   | { type: 'spawn'; kind: ItemKind; lx: number; ly: number }
   | { type: 'tap' }
@@ -186,6 +203,9 @@ interface Held {
   /** Where the press started; a weed comes out once the finger is 60 units from here. */
   pressX: number
   pressY: number
+  /** Where the finger is now, for a rooted weed's pull. */
+  fingerX: number
+  fingerY: number
   /**
    * For heavy junk: waiting to see whether you drag or lift it, dragging it along, or
    * lifted, when only a throw works. Undefined for light things.
@@ -210,6 +230,13 @@ export interface MowerRun {
 
 const MAX_EVENTS = 64
 const SPIN_MAX = 9
+
+/** The set bits in a 16-bit mask. */
+function popcount16(bits: number): number {
+  let n = 0
+  for (let b = bits; b; b &= b - 1) n++
+  return n
+}
 
 /** A dandelion seed lying on a patch, waiting to root as a weed at garden time `at`. */
 export interface Seed {
@@ -245,6 +272,11 @@ export interface GardenOptions {
   host?: boolean
   /** Dev and tests only: no gusts, and Biscuit sleeps all round. */
   calm?: boolean
+  /**
+   * The lobby's yard: no gnomes to start, no schedules (weeds, snails, Biscuit, wind, the
+   * shed), no drying, growth, weed spread, wilting or damage from lying items, and no end.
+   */
+  yard?: boolean
 }
 
 /**
@@ -280,6 +312,10 @@ export class Garden {
   readonly host: boolean
   /** Garden time in ms since play started. */
   t = 0
+  /** A full round's length here, which `?fast` shortens; schedules scale with it. */
+  readonly roundMs: number
+  /** True for the lobby's yard lawn (see `GardenOptions.yard`). */
+  readonly yardLawn: boolean
   /** Play stops at this garden time; later ticks do nothing. */
   readonly endMs: number
   held: Held | null = null
@@ -289,6 +325,9 @@ export class Garden {
   private readonly pending: GardenEvent[] = []
   private readonly point = { x: 0, y: 0, h: 0 }
   private readonly occupied = new Uint8Array(PATCHES)
+  private readonly stuck = new Uint8Array(COLS)
+  /** The rows of each column this mowing press has cut, one bit a row. */
+  private readonly pressCuts = new Uint16Array(COLS)
   /** Garden times of the round's scheduled weeds and snails, and the next of each. */
   private readonly weedAt: number[]
   private readonly snailAt: number[]
@@ -329,32 +368,38 @@ export class Garden {
     endMs = roundMs,
     heatwave = false,
     host = true,
-    calm = false
+    calm = false,
+    yard = false
   }: GardenOptions) {
     this.seed = seed
     this.round = round
-    this.endMs = endMs
+    this.roundMs = roundMs
+    this.endMs = yard ? Infinity : endMs
     this.host = host
-    this.gusts = calm ? [] : gustsFor(seed, roundMs)
-    this.weedAt = weedTimes(seed, round, roundMs)
-    this.snailAt = snailTimes(seed, roundMs)
+    this.yardLawn = yard
+    // The yard keeps only what you do: nothing happens to it on a timetable.
+    const quiet = calm || yard
+    this.gusts = quiet ? [] : gustsFor(seed, roundMs)
+    this.weedAt = yard ? [] : weedTimes(seed, round, roundMs)
+    this.snailAt = yard ? [] : snailTimes(seed, roundMs)
     this.grid = createGrid(seed, lawnClock(roundMs, heatwave))
     this.water = createWater(heatwave)
-    this.shedAt = shedAt(roundMs)
+    this.shedAt = yard ? Infinity : shedAt(roundMs)
     this.yard = {
       t: 0,
-      wakeAt: calm ? Infinity : biscuitWakeAt(roundMs),
-      digAt: calm ? [] : digTimes(seed, roundMs),
+      wakeAt: quiet ? Infinity : biscuitWakeAt(roundMs),
+      digAt: quiet ? [] : digTimes(seed, roundMs),
       seed,
       items: this.items,
       grid: this.grid,
       emit: this.dogEvent
     }
-    gnomeSpots(seed).forEach((patch, k) => {
-      const { lx, ly } = patchCenter(patch)
-      const j = patchJitter(seed, k)
-      this.addItem('gnome', lx + j.dx, ly + j.dy)
-    })
+    if (!yard)
+      gnomeSpots(seed).forEach((patch, k) => {
+        const { lx, ly } = patchCenter(patch)
+        const j = patchJitter(seed, k)
+        this.addItem('gnome', lx + j.dx, ly + j.dy)
+      })
   }
 
   /** Queues a command for the next tick. */
@@ -442,20 +487,54 @@ export class Garden {
       : null
   }
 
-  /** True when a press at (lx, ly) within `reach` lands on the parked mower before the finale. */
+  /**
+   * True when a press at (lx, ly) within `reach` lands on the parked mower before the
+   * finale. A press on the drawn bag doesn't count, even while the bag is too empty to lift.
+   */
   mowerHit(lx: number, ly: number, reach: number): boolean {
     return (
       this.mowerId < 0 &&
       Math.hypot(lx - MOWER_POS.lx, ly - MOWER_POS.ly) <=
-        Math.max(reach, ITEM_RADIUS.mower)
+        Math.max(reach, ITEM_RADIUS.mower) &&
+      (this.mower.bagOff || !onBag(lx, ly, 0))
     )
   }
 
   /**
-   * The columns that show a stripe right now, as a 12-bit mask. Rooted weeds and items
-   * lying on a patch keep it from counting as clean.
+   * How far the rooted weed in your hand is pulled, from 0 at the press to 1 at the
+   * 60-unit pull that pops it out, in any direction. -1 when you hold no rooted weed.
+   */
+  pullProgress(): number {
+    const held = this.held
+    if (held?.target !== 'weed') return -1
+    const d = Math.hypot(held.fingerX - held.pressX, held.fingerY - held.pressY)
+    return Math.min(1, d / YANK_PULL)
+  }
+
+  /**
+   * The columns that stripe right now by Brenda's rule, as a 12-bit mask: rooted weeds,
+   * snails and anything lying on a patch keep it from counting, an item in your hand or
+   * in Biscuit's mouth included.
    */
   stripes(): number {
+    return stripeMask(this.grid, this.cover(false))
+  }
+
+  /**
+   * The stripes as they stand once nothing is carried: like `stripes`, but an item in
+   * your hand or Biscuit's mouth covers nothing. Stripe cues follow this mask, so
+   * carrying something across a stripe hides it with no cue.
+   */
+  settledStripes(): number {
+    return stripeMask(this.grid, this.cover(true))
+  }
+
+  /**
+   * Flags the patches something covers, in a buffer the next call reuses: rooted weeds,
+   * snails, items lying there (Brenda's `lying`, held and carried too unless `settled`),
+   * and the whole footprint of sunk heavy junk.
+   */
+  private cover(settled: boolean): Uint8Array {
     const occupied = this.occupied
     occupied.fill(0)
     for (const weed of this.weeds) occupied[weed.patch] = 1
@@ -466,11 +545,47 @@ export class Garden {
         for (const p of this.footprintOf(item)) occupied[p] = 1
         continue
       }
-      if (item.state !== 'rest' && item.state !== 'slide') continue
+      if (!lying(item)) continue
+      if (settled && (item.state === 'held' || item.state === 'carried'))
+        continue
       const patch = patchAt(item.lx, item.ly)
       if (patch >= 0) occupied[patch] = 1
     }
-    return stripeMask(this.grid, occupied)
+    return occupied
+  }
+
+  /**
+   * The patches in column `col` that keep it from striping by Brenda's rule: long,
+   * marked, holed or covered.
+   */
+  stripeBlockers(col: number): number[] {
+    const occupied = this.cover(false)
+    const grid = this.grid
+    const out: number[] = []
+    for (let i = col; i < PATCHES; i += COLS)
+      if (
+        (grid.length[i] as number) > SHORT_MAX ||
+        grid.mess[i] !== Mess.none ||
+        grid.hole[i] === 1 ||
+        occupied[i] === 1
+      )
+        out.push(i)
+    return out
+  }
+
+  /**
+   * How many patches of each column one mowing pass can't clear, in a 12-entry buffer the
+   * next call reuses: holes, and whatever covers a patch by Brenda's rule. Bots read it to
+   * pick a column worth mowing.
+   */
+  stuckByColumn(): Uint8Array {
+    const occupied = this.cover(false)
+    const stuck = this.stuck
+    stuck.fill(0)
+    for (let i = 0; i < PATCHES; i++)
+      if (occupied[i] === 1 || this.grid.hole[i] === 1)
+        stuck[i % COLS] = (stuck[i % COLS] as number) + 1
+    return stuck
   }
 
   /** The patches under a sunk piece of heavy junk. The list is reused by the next call. */
@@ -497,7 +612,7 @@ export class Garden {
   }
 
   /** The bag's centre on the parked mower, or null while the mower isn't parked. */
-  private bagSpot(): { lx: number; ly: number } | null {
+  bagSpot(): { lx: number; ly: number } | null {
     const home = this.mowerHome()
     if (!home) return null
     return {
@@ -542,12 +657,28 @@ export class Garden {
     )
   }
 
-  /** Puts an item down at once, lying still, outside the command queue. For the reload rebuild. */
+  /** Puts an item down at once, lying still, outside the command queue. For the reload rebuild and the yard. */
   place(kind: ItemKind, lx: number, ly: number): Item {
     return this.addItem(kind, lx, ly)
   }
 
-  /** Roots a plain weed on a patch at once, with no event. For the reload rebuild. */
+  /**
+   * Moves a lying item back to (lx, ly) at once, outside the command queue. For the
+   * yard, whose step objects go back to their start.
+   */
+  putBack(id: number, lx: number, ly: number): void {
+    const item = this.item(id)
+    if (!item) return
+    item.lx = lx
+    item.ly = ly
+    item.h = 0
+    item.vx = item.vy = 0
+    item.state = 'rest'
+    item.restSince = -1
+    this.emit({ type: 'putBack', id, lx, ly })
+  }
+
+  /** Roots a plain weed on a patch at once, with no event. For the reload rebuild and the yard. */
   plantWeed(patch: number): RootedWeed {
     const { lx, ly } = patchCenter(patch)
     const j = patchJitter(this.seed, 4000 + patch)
@@ -568,7 +699,7 @@ export class Garden {
     if (this.queue.length > 0)
       for (const cmd of this.queue.splice(0, this.queue.length)) this.apply(cmd)
     if (!this.shedOpen && this.t >= this.shedAt) this.openShed()
-    runTimers(this.grid, this.t, this.onDry, this.onGrow)
+    if (!this.yardLawn) runTimers(this.grid, this.t, this.onDry, this.onGrow)
     this.stepCompost()
     for (const patch of this.heaps)
       while ((this.heapDamageAt[patch] as number) <= this.t) {
@@ -581,7 +712,14 @@ export class Garden {
     this.stepWind(dt)
     this.runSchedules()
     this.rootSeeds()
-    stepWeeds(this.weeds, this.t, this.drainWeed, this.spreadWeed, this.onClock)
+    if (!this.yardLawn)
+      stepWeeds(
+        this.weeds,
+        this.t,
+        this.drainWeed,
+        this.spreadWeed,
+        this.onClock
+      )
     for (let i = this.snails.length - 1; i >= 0; i--)
       if (!crawl(this.snails[i] as Snail, this.t, dt, this.slime, this.eat))
         this.snails.splice(i, 1)
@@ -636,6 +774,8 @@ export class Garden {
         return this.hold(cmd.lx, cmd.ly)
       case 'release':
         return this.release(cmd.release)
+      case 'snap':
+        return this.snap(cmd)
       case 'arrive':
         return this.arrive(cmd.arrival, cmd.ffMs)
       case 'spawn':
@@ -651,6 +791,7 @@ export class Garden {
         pourAt(this.water, cmd.lx, cmd.ly)
         return
       case 'pourEnd':
+        if (this.water.pour) this.emit({ type: 'pourStop' })
         stopPour(this.water)
         return
       case 'mow':
@@ -672,6 +813,8 @@ export class Garden {
       case 'mowEnd':
         this.noMowerSaid = false
         parkMower(this.mower)
+        this.endMowPress()
+        this.emit({ type: 'mowEnd' })
         return
       case 'sprout':
         if (!this.weeds.some(w => w.patch === cmd.patch))
@@ -712,7 +855,9 @@ export class Garden {
         offX: 0,
         offY: ITEM_LIFT[weed.kind],
         pressX: lx,
-        pressY: ly
+        pressY: ly,
+        fingerX: lx,
+        fingerY: ly
       }
       return
     }
@@ -744,8 +889,44 @@ export class Garden {
       offX: item.lx - lx,
       offY: item.ly - ly,
       pressX: lx,
-      pressY: ly
+      pressY: ly,
+      fingerX: lx,
+      fingerY: ly
     }
+  }
+
+  /**
+   * A fast flick on grass grabs the nearest light thing within `reach` of the press and
+   * follows the finger. When there's none, it reports the miss with the thing within
+   * `near` of the press, if the flick aimed at the fence.
+   */
+  private snap(cmd: Extract<GardenCommand, { type: 'snap' }>): void {
+    if (this.held) return
+    const light = (target: HitTarget | null): HitTarget | null => {
+      if (target?.type !== 'item') return target
+      const item = this.item(target.id)
+      // Heavy junk never snaps: it needs a lift, and a flick would only drag it.
+      return item && !isHeavy(item.kind) ? target : null
+    }
+    const target = light(this.hitTest(cmd.lx, cmd.ly, cmd.reach))
+    if (target) {
+      this.grab(target, cmd.lx, cmd.ly)
+      this.hold(cmd.toX, cmd.toY)
+      return
+    }
+    const dx = cmd.toX - cmd.lx
+    const dy = cmd.toY - cmd.ly
+    const len = Math.hypot(dx, dy) || 1
+    this.emit({
+      type: 'miss',
+      lx: cmd.lx,
+      ly: cmd.ly,
+      dirX: dx / len,
+      dirY: dy / len,
+      near: towardFence(dx, dy)
+        ? light(this.hitTest(cmd.lx, cmd.ly, cmd.near))
+        : null
+    })
   }
 
   /**
@@ -766,6 +947,8 @@ export class Garden {
       offY: item.ly - ly,
       pressX: lx,
       pressY: ly,
+      fingerX: lx,
+      fingerY: ly,
       grip: 'wait',
       gripAt: this.t
     }
@@ -835,7 +1018,9 @@ export class Garden {
       offX: spot.lx - lx,
       offY: spot.ly - ly,
       pressX: lx,
-      pressY: ly
+      pressY: ly,
+      fingerX: lx,
+      fingerY: ly
     }
   }
 
@@ -866,6 +1051,8 @@ export class Garden {
   private hold(lx: number, ly: number): void {
     const held = this.held
     if (!held) return
+    held.fingerX = lx
+    held.fingerY = ly
     if (held.target === 'weed') {
       if (Math.hypot(lx - held.pressX, ly - held.pressY) < YANK_PULL) return
       const index = this.weeds.findIndex(w => w.id === held.id)
@@ -877,10 +1064,10 @@ export class Garden {
       this.weeds.splice(index, 1)
       const item = this.addItem(weed.kind, weed.lx, weed.ly)
       item.state = 'held'
-      item.wiltAt = this.t + WILT_MS
+      item.wiltAt = this.yardLawn ? -1 : this.t + WILT_MS
       held.target = 'item'
       held.id = item.id
-      this.emit({ type: 'yank', id: item.id })
+      this.emit({ type: 'yank', id: item.id, lx: weed.lx, ly: weed.ly })
     }
     const item = this.item(held.id)
     if (!item) {
@@ -905,14 +1092,25 @@ export class Garden {
   private release(release: Release): void {
     const held = this.held
     this.held = null
-    if (!held || held.target !== 'item') return
+    if (!held) return
+    if (held.target === 'weed') {
+      // Letting go before the 60-unit pull leaves the weed in the ground.
+      const weed = this.weeds.find(w => w.id === held.id)
+      const cancelled =
+        release.type === 'putDown' && release.reason === 'cancel'
+      if (weed && !cancelled)
+        this.emit({ type: 'rooted', id: weed.id, lx: weed.lx, ly: weed.ly })
+      return
+    }
     const item = this.item(held.id)
     if (!item) return
     // Heavy junk throws only after a lift; any other letting go sets it down.
     if (held.grip && (held.grip !== 'lift' || release.type === 'putDown')) {
       item.state = 'rest'
       item.h = 0
-      this.emit({ type: 'setDown', id: item.id })
+      // A drag that ends in a swipe is the classic mistake: a drag can never lift.
+      const fast = held.grip === 'drag' && release.type !== 'putDown'
+      this.emit({ type: 'setDown', id: item.id, fast })
       return
     }
     const bag = item.kind === 'bag'
@@ -925,7 +1123,8 @@ export class Garden {
     if (release.type === 'putDown') {
       if (bag) this.returnBag(item)
       else item.state = 'rest'
-      this.emit({ type: 'putDown', id: item.id })
+      const reason = bag && release.reason !== 'cancel' ? 'bag' : release.reason
+      this.emit({ type: 'putDown', id: item.id, reason })
       if (item.kind === 'seedClock') this.burstClock(item)
       return
     }
@@ -935,7 +1134,13 @@ export class Garden {
       if (bag) this.returnBag(item)
       else item.state = 'rest'
       item.h = 0
-      this.emit({ type: 'tired', id: item.id, reason: block })
+      this.emit({
+        type: 'tired',
+        id: item.id,
+        reason: block,
+        lx: item.lx,
+        ly: item.ly
+      })
       if (item.kind === 'seedClock') this.burstClock(item)
       return
     }
@@ -999,6 +1204,7 @@ export class Garden {
     if (arrival.kind === 'seed') return
     this.emit({
       type: 'arrive',
+      id: item.id,
       kind: arrival.kind,
       x: LAWN_W - arrival.x,
       ly: item.ly,
@@ -1041,6 +1247,7 @@ export class Garden {
         if (this.held?.id === item.id) this.held = null
         this.emit({
           type: 'cross',
+          id: item.id,
           crossing: crossingOf(flight, item.kind, item.spin, wiltIn, {
             bounced,
             back: bounced && !this.ownThrow(item),
@@ -1059,6 +1266,7 @@ export class Garden {
         this.blame.clips++
         this.emit({
           type: 'clip',
+          id: item.id,
           clip: { kind: item.kind, x: item.lx, at: this.t }
         })
         return
@@ -1096,6 +1304,7 @@ export class Garden {
       setMess(this.grid, patch, Mess.scuff)
       this.emit({
         type: 'land',
+        id: item.id,
         landing: { patch, kind: item.kind, at: this.t },
         fromNeighbour: item.fromNeighbour
       })
@@ -1159,10 +1368,17 @@ export class Garden {
     const patch = patchAt(item.lx, item.ly)
     this.emit({
       type: 'land',
+      id: item.id,
       landing: { patch, kind, at: this.t },
       fromNeighbour: item.fromNeighbour
     })
-    this.emit({ type: 'sink', kind, patch, fromNeighbour: item.fromNeighbour })
+    this.emit({
+      type: 'sink',
+      id: item.id,
+      kind,
+      patch,
+      fromNeighbour: item.fromNeighbour
+    })
     if (kind === 'bin')
       for (const spill of litterSpill(this.seed, item.id, item.lx, item.ly)) {
         const litter = this.addItem('litter', item.lx, item.ly)
@@ -1245,7 +1461,7 @@ export class Garden {
   }
 
   /**
-   * At 0:40 the shed bangs open. The crate's 15 gnomes fly out onto the back half of the
+   * At 0:40 the shed bangs open. The crate's 12 gnomes fly out onto the back half of the
    * lawn, the bin and the trampoline roll onto the patio, and the mower becomes junk too.
    * Dev tools can open it early.
    */
@@ -1295,6 +1511,7 @@ export class Garden {
     }
     this.emit({
       type: 'land',
+      id: bag.id,
       landing: { patch: patchAt(lx, ly), kind: 'bag', at: this.t },
       fromNeighbour: bag.fromNeighbour
     })
@@ -1419,10 +1636,11 @@ export class Garden {
       if (this.snails.length >= SNAIL_CAP) continue
       const { dir, row } = snailSpot(this.seed, k)
       const jitter = patchJitter(this.seed, 500 + k).dy * 0.5
+      const id = this.nextId++
       this.snails.push(
-        newSnail(this.nextId++, dir, row, jitter, this.snailAt[k] as number)
+        newSnail(id, dir, row, jitter, this.snailAt[k] as number)
       )
-      this.emit({ type: 'snail', row, dir })
+      this.emit({ type: 'snail', id, row, dir })
     }
   }
 
@@ -1437,10 +1655,10 @@ export class Garden {
     if (patch < 0 || patch >= PATCHES) return
     const { lx, ly } = patchCenter(patch)
     const j = patchJitter(this.seed, 100 + k)
-    this.weeds.push(
-      newWeed(this.nextId++, patch, lx + j.dx, ly + j.dy, at, kind)
-    )
-    this.emit({ type: 'sprout', patch, spread })
+    const id = this.nextId++
+    const weed = newWeed(id, patch, lx + j.dx, ly + j.dy, at, kind)
+    this.weeds.push(weed)
+    this.emit({ type: 'sprout', id, patch, spread, lx: weed.lx, ly: weed.ly })
   }
 
   private readonly drainWeed = (weed: RootedWeed) =>
@@ -1453,7 +1671,7 @@ export class Garden {
   }
 
   private readonly onClock = (weed: RootedWeed) =>
-    this.emit({ type: 'clock', patch: weed.patch })
+    this.emit({ type: 'clock', id: weed.id, patch: weed.patch })
 
   /**
    * A seed clock bursts where it touches the ground. Its 3 seeds land on patches around
@@ -1550,7 +1768,8 @@ export class Garden {
       this.snails.push(snailFromShell(this.nextId++, item.lx, item.ly, this.t))
       return
     }
-    while (item.nextDamageAt <= this.t) {
+    // The yard's lawn takes no damage from what lies on it.
+    while (!this.yardLawn && item.nextDamageAt <= this.t) {
       const patch = patchAt(item.lx, item.ly)
       if (patch >= 0) crush(this.grid, patch, 1)
       item.nextDamageAt += REST_DAMAGE_MS
@@ -1590,7 +1809,26 @@ export class Garden {
     this.emit({ type: 'shaggy', col })
   }
 
+  /**
+   * A mowing press ended: each column it cut 12 or more patches of that still doesn't
+   * stripe reports what blocks it.
+   */
+  private endMowPress(): void {
+    const mask = this.stripes()
+    for (let col = 0; col < COLS; col++) {
+      const cut = popcount16(this.pressCuts[col] as number)
+      this.pressCuts[col] = 0
+      if (cut < BLOCKED_CUTS || (mask >> col) & 1) continue
+      this.emit({ type: 'blocked', col, patches: this.stripeBlockers(col) })
+    }
+  }
+
   private readonly onMow = (event: MowEvent) => {
+    if (event.type === 'cut') {
+      const col = event.patch % COLS
+      this.pressCuts[col] =
+        (this.pressCuts[col] as number) | (1 << Math.floor(event.patch / COLS))
+    }
     if (event.type === 'scalp') this.blame.scalped++
     if (event.type === 'unheap') {
       const index = this.heaps.indexOf(event.patch)

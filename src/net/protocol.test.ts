@@ -82,6 +82,11 @@ describe('protocol validators', () => {
     expect(isMsg({ ...sync, over: { r: 'noContest', w: '', m: 'x' } })).toBe(
       false
     )
+    expect(isMsg({ ...sync, first: true })).toBe(true)
+    expect(isMsg({ ...sync, first: 'yes' })).toBe(false)
+    for (const yard of [1, 2, 3]) expect(isMsg({ ...sync, yard })).toBe(true)
+    for (const yard of [0, 4, 1.5, '2', null])
+      expect(isMsg({ ...sync, yard })).toBe(false)
     expect(isMsg({ ...sync, copy: 'A'.repeat(401) })).toBe(false)
     expect(isMsg({ ...sync, copyAt: -1 })).toBe(false)
   })

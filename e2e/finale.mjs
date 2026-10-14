@@ -9,6 +9,7 @@
 import {
   dev,
   dragHold,
+  frames,
   hold,
   launch,
   localPair,
@@ -70,12 +71,15 @@ async function jumpTo(a, b, msLeft, round) {
   // Only the host can jump; the guest's call does nothing.
   for (const p of [a, b])
     await dev(p, (g, a) => g.jump(a.msLeft, a.round), { msLeft, round })
-  for (const p of [a, b])
+  for (const p of [a, b]) {
     await waitFor(
       p,
       s => s.matchPhase?.kind === 'play' && s.matchPhase.round === round,
       { label: `round ${round}` }
     )
+    // The jump's catch-up can stall frames for a moment; real presses wait it out.
+    await frames(p)
+  }
 }
 
 async function run(browser, size) {
@@ -83,7 +87,7 @@ async function run(browser, size) {
   const flick = touch ? touchFlick : mouseFlick
   const { a, b, check, context } = await localPair(browser, {
     size,
-    query: 'fast&calm'
+    query: 'fast&calm&first=1'
   })
   await startMatch(a, b)
 
@@ -104,7 +108,8 @@ async function run(browser, size) {
   )
   if (Math.abs(opened[0] - opened[1]) > 100)
     throw new Error(`${size}: the sheds opened ${opened} apart`)
-  await waitForNotice(a, "The shed's open. Hold heavy junk to lift it.")
+  // A new player's banner covers the peek strip for 3s; the shed tip follows it later.
+  await a.locator('[data-testid="shed-banner"]').waitFor({ timeout: 2000 })
   await sleep(1500)
   await shot(a, `finale-${size}-shed`)
   let g = await garden(a)
@@ -123,10 +128,7 @@ async function run(browser, size) {
   const from = await target(a, bin.id)
   const to = await client(a, { lx: spot.lx, ly: spot.ly - 38 })
   await dragHold(a, from, to, 350, 80, touch)
-  await waitForNotice(
-    a,
-    "Drag it forward first. It won't clear from the patio."
-  )
+  await waitForNotice(a, 'Slide it halfway up the lawn, then let go.')
   await sleep(150)
   g = await garden(a)
   const dragged = g.items.find(i => i.id === bin.id)
@@ -144,6 +146,20 @@ async function run(browser, size) {
     bin.id,
     `${size}: the lifted bin never threw`
   )
+  // Pressing it on the grass earned the second heavy-junk tip.
+  await until(
+    a,
+    g =>
+      g
+        .events(80)
+        .some(
+          e =>
+            e.type === 'note' &&
+            e.detail.text === 'Now hold it still until it lifts, then swipe up.'
+        ),
+    null,
+    `${size}: no lift tip for heavy junk on the grass`
+  )
   const sunk = await until(
     b,
     g => {
@@ -156,6 +172,21 @@ async function run(browser, size) {
     },
     null,
     `${size}: no sunk bin with 4 litter on the other lawn`,
+    5000
+  )
+  // The shed tip showed after the banner, behind the heavy-junk tips.
+  await until(
+    a,
+    g =>
+      g
+        .events(200)
+        .some(
+          e =>
+            e.type === 'note' &&
+            e.detail.text === 'Gnomes first. Then big junk, if you dare.'
+        ),
+    null,
+    `${size}: no shed tip after the banner`,
     5000
   )
   await sleep(300)
@@ -277,7 +308,7 @@ async function run(browser, size) {
   const grass = await client(a, bare)
   await dragHold(a, grass, { x: grass.x + 80, y: grass.y }, 300, 50, touch)
   // Toasts show in every round, unlike tips.
-  await waitForNotice(a, 'You threw your mower. No more mowing this round.')
+  await waitForNotice(a, 'You threw your mower. No mowing this round.')
   const clock = await a.evaluate(() => {
     const el = document.querySelector('[data-testid="clock"]')
     return {

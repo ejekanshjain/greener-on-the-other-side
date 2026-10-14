@@ -11,7 +11,7 @@ A 2-player meme game that takes an idiom literally. It is built to start a petty
 - **Length:** about 11 minutes per match. A match is best of 3 rounds. Each round is 3 minutes of play plus a 20s reveal, or 30s after the last round.
 - **Money:** free. No ads, no tip jar, no purchases.
 - **No accounts:** no sign-up, no leaderboards, no public counters.
-- **No saving:** nothing about a match is stored. Your browser remembers only your display name and a random player id.
+- **No saving:** nothing about a match is stored. Your browser remembers only your display name, a random player id and whether you've finished a match.
 - **No shop:** no coins and no upgrades. Every round starts both lawns equal.
 - **Art style:** hand-drawn, scrappy meme look.
 - **Physics:** a small slide-and-arc step written for this game, with no physics library. Each browser simulates only its own garden.
@@ -60,7 +60,7 @@ Each patch tracks four things:
 
 - **Health:** 0 (mud) to 7 (lush). Every patch starts the round at 5.
 - **Length:** 0 to 3 (shaggy). Every patch starts at 2. Length 0 or 1 counts as short.
-- **Mess:** slime, trampling, a landing scuff, clippings, a wilted weed, a scalp mark or a mud puddle. Mowing the patch clears it.
+- **Mess:** slime, trampling, a landing scuff, clippings, a wilted weed, a scalp mark, drag ruts or a mud puddle. One mowing pass clears it.
 - **Hole:** dug by your dog. A hole stays until the round ends.
 
 Each patch dries by 1 health every 140s, or every 105s from 1:20 left. It grows 1 length every 75s, and mowing it restarts that timer. The timings are staggered per patch, so the lawn changes a patch at a time.
@@ -81,7 +81,7 @@ Each press does one job until you let go. What sits under your finger picks the 
 - Grab reach is 22 px from a finger and 10 px from a mouse pointer. A larger item uses its drawn size. The nearest target wins.
 - The can tips during the 150 ms wait, so you see which job is starting.
 - A pour turns into mowing once your finger moves faster than 200 px/s for 100 ms. Mowing never turns into watering.
-- A press that moves faster than 1,000 px/s in its first 100 ms never mows. It grabs the nearest item within 44 px, or does nothing.
+- A press that moves faster than 1,000 px/s in its first 100 ms never mows. It grabs the nearest item within 44 px. With nothing in reach, it leaves a short grey dashed swish along your finger's path, with a puff of dust where it began, and does nothing else.
 
 ### Letting Go
 
@@ -94,39 +94,45 @@ One rule covers every release:
 
 ### On Screen
 
-- **Top bar:** your name, your rosettes, the clock, their rosettes, then their name. The clock sits in the middle and is the largest. Names shorten to 10 characters in the bar.
+- **Top bar:** "You", your rosettes, the clock, their rosettes, then their name. The clock sits in the middle and is the largest. Names shorten to 10 characters in the bar.
 - **Their status:** **Away** shows beside their name. **Gone 0:42** replaces their rosettes while it applies.
 - **Buttons:** the menu button sits at the left end of the top bar. **Shake Fist** sits at the right end, beside their name. Nothing you need to press sits under the top bar.
 - **In the scene:** the water level shows on the can, and the fill shows on the grass bag. Arm tiredness is a ring around the item you hold.
-- **Menu button:** Settings, How to Play and **Leave**. The menu reads "The round keeps going while this is open."
-- **Tips:** in round 1 of every match and in Practice, a one-line tip shows the first time each thing happens. **Hide Tips** turns them off until you reload.
+- **Menu button:** Settings, How to Play, **Show Tips** or **Hide Tips**, and **Leave**. The menu reads "The round keeps going while this is open."
+- **Tips:** a new player gets one-line tips through all of their first match, online or in Practice. Everyone gets the toasts. See Onboarding.
 - **Phone sideways:** turning a phone sideways covers the game with "Turn your phone upright." The garden keeps running underneath. Desktop windows stay as they are.
 
 ### Mowing
 
-- Press on grass and rub back and forth. The mower appears 30 units above your finger, so you can see the blades. It rolls back to the patio when you let go.
+- Press on grass and drag. Mow up and down a column, fence to patio, to cut the whole column in one pass. The mower appears 30 units above your finger, so you can see the blades. It rolls back to the patio when you let go.
 - The mower is 1 patch wide. Each time it enters a patch, it cuts that patch to short: length 1, or 0 if it was already short. It restarts the patch's 75s growth timer.
 - One pass stripes a column for 75s. Two passes hold it for 150s.
 - A column shows a stripe once 14 of its 16 patches are short and clean. Clean means no mess, weed, hole, heap or item.
-- Stripes alternate light and dark by column on their own.
+- A broken stripe comes back once you clear the column and mow it again. See Repairable Stripes.
+- When one of your columns becomes a stripe, a light sweeps down it with a soft `ding`, and a white chalk tick appears on the patio's edge under it. When it loses its stripe, it flickers out and its tick turns into a red cross for 1s.
+- When one press cuts 12 or more of a column's 16 patches and it still doesn't stripe, the patches that block it flash for 1s.
+- Mow slowly. A press that moves faster than 1,000 px/s in its first 100 ms is a flick, and never mows.
+- A cut patch shows short mow lines until it grows long again, so you can see your pass.
+- Stripes alternate two shades by column on their own. Both look lighter and greener than unstriped grass at the same health, so a stripe never reads as dead grass.
 - Mower speed is measured in screen pixels, like throws. From 1,000 px/s the mower shakes and sparks, as a warning. From 1,300 px/s it scalps: the patch loses 1 health and gets a scalp mark.
-- Every cut adds 1 to the grass bag, which holds 96 cuts. A full bag stops the mower, and it spits clippings onto the patch under it.
+- Every cut adds 1 to the grass bag, which holds 96 cuts. A full bag reads "Full". It stops the mower, which spits clippings onto the patch under it.
 - Mowing clears mess marks, including the scuffs your neighbour's throws leave. Mowing a clippings heap clears it a patch at a time, and each heap patch adds 6 cuts to your bag.
 
 ### Watering
 
 - Press and hold still on grass. After 150 ms the can pours under your finger. Slide slowly to move the pour.
 - The pour covers a circle 120 units across. Each patch under it gains 1 health every 0.4s.
-- A full patch (7) sparkles. Pour on a sparkling patch for 1.5s more and it turns to mud: health 2, with a puddle.
+- A full patch (7) sparkles. Pour on a sparkling patch for 1.5s more and it turns to mud: health 2, with a puddle. It splashes as it turns, with a `squish`.
 - The can holds 10s of pouring.
-- **The tap:** tap it once and it runs. The can fills in 3s while you keep playing. Tap it again to turn it off.
+- **The tap:** press it once and it runs. The can fills in 3s while you keep playing. Press it again to turn it off.
+- Once the can is full, water spills over its rim while the tap runs.
 - A tap left running for 8s floods the 2 patches nearest it to mud.
 - Pouring takes the can back from the tap, but the tap keeps running.
-- An empty can glugs and pours nothing. A toast says "The can's empty. Turn on the tap."
+- An empty can glugs and pours nothing. A toast says "The can's empty. Press the tap to fill it."
 
 ### Throwing
 
-- Press on a weed, snail or piece of junk to grab it. A rooted weed needs a 60-unit pull before it comes out.
+- Press on a weed, snail or piece of junk to grab it. A rooted weed needs a 60-unit pull before it comes out: drag it in any direction. While you drag, it leans toward your finger and a marker-yellow ring round it fills. When the ring is full, it pops out with a puff of dirt.
 - A held item stays within 100 units of where you grabbed it. For a yanked weed, that's 100 units from its root. Your finger can keep moving, and the throw launches from that spot.
 - Swipe toward the fence and let go. Swipe speed sets how far it flies, and swipe direction sets where.
 - Swipe speed is measured in screen pixels, so phones and monitors feel the same. A throw flies 0.4 units per px/s, so 1,500 px/s flies 600 units. Speeds over 2,500 px/s add nothing.
@@ -136,10 +142,11 @@ One rule covers every release:
   - The slowest throw (400 px/s) from the front 5 rows.
 - A throw that reaches the fence without that 15% margin clips the top. It teeters there for 0.6s, on both screens, then drops back onto your front rows, across your stripes.
 - Shorter throws drop on your lawn. Throws that go wide hit a hedge and drop back.
-- A landing crushes the patch under it by 1 health and leaves a scuff mark. So a clipped throw costs you a stripe.
+- A landing crushes the patch under it by 1 health and leaves a scuff mark. So a clipped throw costs you a stripe until you mow that column again.
 - A throw long enough to cross their whole lawn bounces off their back wall onto their back row.
 - Your hand needs 0.4s between throws.
 - **Tired arm:** each throw fills the arm meter by 18%, or 45% for heavy junk. It drains 15% per second. Throws fly up to 40% shorter as it fills. A full meter means no throws for 1.5s.
+- **Blocked throw:** a throw your hand or arm refuses drops the item with a puff. "Too soon" or "Arm's tired" shows beside it for 0.8s, and the arm ring flashes red.
 - **Catch:** press on something falling over the fence to catch it before it touches your grass. Throw it straight back.
 
 ### Seeing Your Hits
@@ -155,11 +162,12 @@ One rule covers every release:
 - **Turn the tap on and off:** the can fills in 3s, and a tap left running floods your patio rows.
 - **Empty the grass bag:** every 96 cuts. Drag the bag onto the compost bin and hold it there for 1.5s. Or swipe the bag at the fence: their lawn gets a clippings heap that smothers 4 patches. Clip the fence and the heap bursts across your own front rows.
 - **Watch the dog:** tap Biscuit while he circles a patch, or he digs a hole in it. When he barks at an item, throw it before he fetches it.
-- **Re-mow:** grass grows back, and everything that lands leaves a mess mark.
+- **Re-mow:** grass grows back, and everything that lands leaves a mess mark. Mowing again restores the stripe.
 
 ### Things That Go Wrong
 
-- **Weeds:** sprout on patches the round's seed picks. A rooted weed drains its patch by 1 health every 15s. Every 30s it spreads to a neighbouring patch. At most 40 weeds root at once.
+- **Weeds:** sprout on patches the round's seed picks. A rooted weed drains its patch by 1 health every 15s. Every 30s it spreads to a neighbouring patch. At most 40 weeds root at once. A new weed pops up through a small puff of dirt, whether it sprouts, spreads or grows from a seed.
+- **Rooted weeds hold on:** a flick shorter than the 60-unit pull leaves the weed rooted. It shakes, with a small dirt puff.
 - **Yanked weeds wilt:** a weed wilts 20s after you pull it, wherever it lies. A wilted weed becomes a mess mark that mowing clears. It never roots again.
 - **Dandelions (rounds 2 and 3):** 1 weed in 4 is a dandelion. After 40s it turns into a seed clock. A seed clock bursts into 3 seeds wherever it touches the ground, and each seed roots as a weed after 10s. Yank one and drop it, and its seeds land around you. Throw it over the fence and it bursts on their side instead.
 - **Snails:** crawl in from a hedge at 10 units/s and cross the lawn to the other hedge, where they leave. They slime every patch they cross and eat 1 health every 8s from the patch they sit on. At most 12 crawl in a garden.
@@ -188,6 +196,7 @@ At 0:40 the shed door bangs open. A crate of 12 gnomes tips across the back half
 | Trampoline | 3 by 3 patches | Crushes each patch by 2. Anything landing on it later bounces back the way it came, at 90% speed | -6 |
 
 - The crate's gnomes count against you while they lie on your lawn. Get them over the fence.
+- The crate's gnomes break stripes too. Throw them over, then mow those columns again before 0:00 to get the stripes back.
 - Gnomes throw like weeds. The arm meter is all that stops you.
 - The bin, the mower and the trampoline are heavy. Lift one first: press and hold it for 0.6s, then swipe. Up to 12 px of wobble still counts as holding.
 - After a lift, only a throw works. Moving slowly sets it back down.
@@ -218,7 +227,7 @@ At 0:00 both screens freeze, and Brenda arrives with her clipboard. The reveal r
 
 1. **0s to 2s:** "Time's up." The doorbell rings, and Brenda walks along the fence.
 2. **2s to 8s:** both lawns appear side by side, top-down, tinted the way you saw them all round. Brenda drags her clipboard across them, and the tint peels off like cling film. She peels your lawn first and theirs last. In the best rounds, the lawn next door turns out to be mud under a trampoline and 14 gnomes.
-3. **8s to 14s:** each lawn's score counts up: Green, Stripes, Tidy and Junk. Brenda gives one line per lawn.
+3. **8s to 14s:** each lawn's score counts up: Green, Stripes, Tidy and Junk. Each line shows what Brenda counted, such as "11 gnomes" beside Junk (see Reveal Counts). Brenda gives one line per lawn.
 4. **14s to 17s:** she pins a rosette on the winner's gate, and the round score updates.
 5. **17s to 20s:** the next round's countdown.
 
@@ -234,6 +243,8 @@ Brenda picks her line from what she finds:
 | 3 or more holes | "Something's been digging." |
 | All 12 stripes | "Proper stripes. Suspicious." |
 | Under 3 points between you | "Too close. I'm going with my gut." |
+| Anything else, on the winner | "Neat edges. I approve." |
+| Anything else, on the loser | "Could be greener." |
 
 **Your own fault:** each screen counts the damage you did to your own lawn. It tracks 6 kinds:
 
@@ -271,7 +282,7 @@ Each 3-minute round gets busier in four stretches:
 | 1:20 to 0:40 | every 2.5s | every 7s | every 105s | faster drying |
 | 0:40 to 0:00 | every 4s | every 7s | every 105s | the shed opens; the clock ticks the last 10s |
 
-- **Every round** starts with 3 gnomes standing in the middle third of each lawn. The seed places them, and they stand on the same patches on both lawns. The first tip reads "Throw the gnome over the fence."
+- **Every round** starts with 3 gnomes standing in the middle third of each lawn. The seed places them, and they stand on the same patches on both lawns. A new player's first tip reads "Throw the gnomes over the fence."
 - **Round 1:** as in the table. Its second weed sprouts on the back row at 2:50 left, so the first hard throw comes early.
 - **Round 2:** adds dandelions.
 - **Round 3:** a heatwave. Grass dries 2.5 times as fast all round, and the can takes 6s to fill.
@@ -316,7 +327,7 @@ Every fail traces back to something you did. The game warned you, and you were b
    - A code with a character outside the alphabet shows "Codes are 6 characters with no 0, O, 1, L or I."
    - Pasting a whole link into the box works too.
    - A room link with capitals switches to lowercase. A link with a bad code shows "That link isn't a room."
-6. **Lobby:** two garden gates, one per player, each with a name and a **Ready** button. A 3-line how-to sits underneath. **Ready** is a toggle. The phone stays awake in the lobby.
+6. **Lobby:** two garden gates, one per player, each with a name and a **Ready** button. The What Brenda Counts card sits under the gates, above **Ready**, and **How to Play** sits beside **Leave** (see Onboarding). A new player's card adds **Try the Yard**, a practice lawn with no clock (see The Yard). **Ready** is a toggle. The phone stays awake in the lobby.
 7. **Countdown:** once both players are Ready, a 3s countdown runs on the shared clock: "3, 2, 1, Mow!"
 8. **Rounds:** 3 minutes of play, then Brenda's reveal, which ends with the next round's countdown. Nobody presses Ready between rounds.
 9. **Match end:** the result, both true lawns, your worst-moment replay and the share card. The buttons are **Rematch** and **Leave**.
@@ -332,12 +343,13 @@ A room exists only as a Pusher channel, so any valid code opens a lobby. The roo
 |---|---|---|
 | Connecting | "Opening the garden gate…" | **Leave** |
 | No connection after 8s | "Can't reach the garden. Check your signal or play Practice Alone." | **Try Again**, **Practice Alone** |
-| Alone, you started the room | The code and "Send the link to your neighbour." | **Copy Link**, **Share Link**, **Leave** |
-| Alone, you arrived by link | "Waiting for your neighbour. Keep this page open." | **Leave** |
-| Alone, you typed a code | "Nobody's here yet. Check the code with your friend." | **Leave** |
-| Both here | Both gates | **Ready**, **Leave** |
-| You're Ready | "Waiting for neighbour_name to press Ready." | **Not Ready**, **Leave** |
-| They're Ready | Their gate reads Ready, and your **Ready** button pulses | **Ready**, **Leave** |
+| Alone, you started the room | The code and "Send the link to your neighbour." | **Copy Link**, **Share Link**, **How to Play**, **Leave** |
+| Alone, you arrived by link | "Waiting for your neighbour. Keep this page open." | **How to Play**, **Leave** |
+| Alone, you typed a code | "Nobody's here yet. Check the code with your friend." | **How to Play**, **Leave** |
+| Both here | Both gates and What Brenda Counts. A new neighbour's gate shows **First Match** | **Ready**, **How to Play**, **Leave** |
+| You're Ready | "Waiting for neighbour_name to press Ready." | **Not Ready**, **How to Play**, **Leave** |
+| They're Ready | Their gate reads Ready, and your **Ready** button pulses | **Ready**, **How to Play**, **Leave** |
+| How to Play open | The How to Play lines and one status line, such as "neighbour_name is ready." | **Back** |
 | Countdown | "3, 2, 1, Mow!" | none |
 | Your connection drops | A **Reconnecting…** banner over the running garden | none |
 | They pressed Leave mid-match | "neighbour_name stormed off. You win." Then the lobby | **Back to Lobby** |
@@ -357,6 +369,8 @@ Accessibility:
 - Screen readers read the room code letter by letter.
 - A polite live region announces "neighbour_name joined", "neighbour_name is ready" and "neighbour_name left".
 - Once pressed, **Ready** reads **Not Ready**, and screen readers hear the waiting line with it.
+- Screen readers hear each tip, toast and round banner as it shows, from a polite status line. **First Match** is part of the gate's text.
+- When a new match starts, nothing from the last match's verdict is read again.
 - Enter submits the name and code boxes. Focus moves to the heading of each new screen.
 - Pinch zoom works on menus and the lobby. Only the game canvas blocks it.
 
@@ -382,13 +396,371 @@ Accessibility:
 **Practice Alone** plays a full match against Mr Pemberton, a scripted bot neighbour. It needs no connection and sends nothing to Pusher, so it works when the day's quota runs out. It still runs through the same room code as online play, with Mr Pemberton on the other end.
 
 - He plays by the same rules, with the same seeded weeds, snails and gnomes.
-- **Round 1, polite:** he only throws back what you send him, 4s to 8s later. His watering makes up 60% of his drying, and he mows a column every 12s. Tips show you how to grab, throw, mow, water and do both chores.
+- **Round 1, polite:** he only throws back what you send him, 4s to 8s later. His watering makes up 60% of his drying, and he mows a column every 12s.
+- A new player gets the same yard and staged tips in Practice as online, and finishing a Practice match counts as finishing a match (see Onboarding).
 - **Round 2, normal:** he throws back within 2s to 6s. He also sends his own weeds and snails every 5s to 9s. 1 throw in 5 clips the fence and drops on his side. He says "Blast." His watering makes up all of his drying, and he mows a column every 6s.
-- **Round 3, petty:** he throws back within 1.5s and empties his whole shed at 0:40, heavy junk first. 1 light throw in 13 clips the fence. His watering makes up 130% of his drying, and he mows a column every 6s.
+- **Round 3, petty:** he throws back within 1.5s and empties his shed at 0:40, the bin and trampoline first. 1 light throw in 13 clips the fence. His watering makes up 130% of his drying, and he mows a column every 6s. He keeps his mower to re-mow his stripes from 0:15, then throws it over 6s before 0:00.
 - He always waters his driest patches first.
 - **His reactions:** his head pops up with "My begonias!" when a gnome lands in his front 4 rows. He shakes his fist after 3 hits within 10s. He laughs at your clips.
 - Tuning target: you beat polite Pemberton on your first try. Once you know the game, you beat petty Pemberton about half the time. Rounds simulated without a screen, with scripted players on both sides, check both targets.
+- The finale has three fair plans: throw everything over, mow once your gnomes are gone, or throw your gnomes and then mow for stripes in the last 18s. In simulated rounds each beats each other in 35% to 65% of rounds. A player who mows in the last 15s holds a stripe at 0:00 in 98% of rounds.
 - Brenda's reveal, the replay and the share card work as they do online.
+
+### Onboarding
+
+A friend who opens your link skips the home screen and meets a running clock. Onboarding gives a new player more information, never easier rules. Both lawns play by the same rules, and both screens show the same scores.
+
+#### Who Counts as New
+
+- Your browser remembers one yes/no fact beside your name and player id: whether you've finished a match. It holds no scores and no history.
+- The fact is saved when the last reveal of a match ends on your screen, online or in Practice. A page that rejoins a match Brenda already decided saves it too.
+- A walkover, a storm-off, a no contest, or leaving before the last reveal ends saves nothing.
+- Without the fact, you're a new player for your next match. From the rematch on, you're a returning player.
+- Whether you get a new player's tips is read once, as each match starts, so teaching never switches off mid-match.
+- The **First Match** tag on your lobby gate follows the fact as it is now. It goes as soon as you finish a match, so **Back to Lobby** shows your friend no tag. **Try the Yard** on your lobby card follows the fact the same way.
+- The guess can be wrong. A returning player on a new phone gets tips for one match, and **Hide Tips** stops them. A new player on a shared browser can press **Show Tips**.
+- Dev builds take `?first=1` or `?first=0` to make a tab new or returning, since `?local` test tabs share storage.
+
+#### Your First Match by Link
+
+What a new player sees, from opening the link to the end of their first match. Times are the round clock, with seconds played in brackets.
+
+1. **The link:** "Opening the garden gate…" shows for 1s to 3s.
+2. **The lobby:** the card **The Garden Gate** shows your gate, with your funny name and "You" under it. Alone, it reads "Waiting for your neighbour. Keep this page open."
+3. **Your friend arrives:** both gates show. Your friend's screen adds a **First Match** tag to your gate. Yours shows nothing extra.
+4. **What Brenda Counts** sits under the gates, above **Try the Yard**, **Ready**, **How to Play** and **Leave**.
+5. **How to Play** swaps the card for the How to Play lines and a **Back** button. The lobby has no clock, so reading costs nothing. One status line stays, such as "neighbour_name is ready."
+6. **Try the Yard** opens a practice lawn with no clock, where you throw a gnome, pull and throw a weed, and mow a stripe (see The Yard). Your friend's screen reads "neighbour_name is trying the yard (2 of 3)."
+7. **Ready** turns into **Not Ready**, with "Waiting for neighbour_name to press Ready." If your friend pressed first, your **Ready** starts to pulse once the card has shown for 6s and you've finished or skipped the yard.
+8. **Countdown:** "3, 2, 1, Mow!" over the real lawn. Round 1 has no banner, so the greener tint still fools you. The top bar shows 3:00. Your presses do nothing until "Mow!", as for everyone.
+9. **Top bar:** your own name tag reads "You", as it does for everyone.
+
+Round 1 teaches throwing, weeds, snails, watering, mowing, Biscuit's digs and the shed:
+
+- **Countdown:** "Throw the gnomes over the fence." A see-through finger presses the nearest gnome, swipes it up and lets go mid-swipe.
+- **3:00 (0s):** "Mow!" The finger plays once more, and your first touch stops it.
+- **About 2:55 (5s):** the first weed sprouts. "Drag the weed out first, then swipe it up."
+- **2:50 (10s):** a weed sprouts on the back row. A soft throw from there clips. Once it drops back: "Too soft. It clipped the fence."
+- **About 2:47 (13s):** a snail crawls in. "Grab the snail before it slimes your grass."
+- **Your friend's first throw lands:** "That came from next door. Throw it back."
+- **2:35 (25s):** "Hold still on brown grass until it sparkles." At your first sparkle: "Sparkling means full. Stop pouring."
+- **The can runs dry:** the toast "The can's empty. Press the tap to fill it." Once you turn the tap on: "Press the tap again within 8s, or it floods."
+- **2:20 (40s) on:** Biscuit wakes. His first circle jumps the line: "Press Biscuit now, or he digs a hole." Wind and fetching get no tips until round 2.
+- **About 1:55 (65s):** a column grows shaggy. "Mow slowly up and down a whole column."
+- **Your first stripe:** "Stripe! It scores if it lasts until 0:00."
+- **Your first stripe broken by something landing or a mark:** "Stripe broken. Clear it and mow again."
+- **0:40 (140s):** the shed bangs open. A one-line banner covers the peek strip for 3s: "The shed's open. Every gnome costs a point." Then the tip "Gnomes first. Then big junk, if you dare."
+- **Your first press on heavy junk on the patio:** "Slide it halfway up the lawn, then let go."
+- **Your first press on heavy junk on the grass:** "Now hold it still until it lifts, then swipe up."
+- **Your lawn first holds no gnome after 0:40:** "Mow columns now. Stripes count at 0:00."
+- **0:00:** the tip line clears. Brenda's reveal runs as it does for everyone, with each score line showing what she counted.
+
+A yard step you finished replaces its round 1 tip: step 2 the weed tip, and step 3 the mow tip. The start tip and the ghost finger still play in the countdown.
+
+Round 2 teaches the wind, fetching, the bag and dandelions:
+
+- The "Round 2: Dandelions" banner shows over the countdown, as for everyone. The coach tip shows in the tip line during the same countdown: what cost you most in round 1, and the fix.
+- The weathervane's first swing gets the tip for its gust, such as "Wind in 2s. It pushes your throws back."
+- Biscuit's first bark: "Biscuit's eyeing that. Throw it first." If he grabs it, the tip names what he took, such as "Biscuit has your gnome. Press it."
+- The bag at 80 cuts: "Bag nearly full. Compost it or swipe it over."
+- The first seed clock: "Seed clock. Drag it out and throw it over."
+- "Mow columns now. Stripes count at 0:00." shows once your lawn holds no gnome after 0:40, or at 0:15 left.
+- A round 1 tip you never earned can still show.
+
+Round 3, if the match gets there, teaches the heatwave and catching:
+
+- The "Round 3: Heatwave" banner and the coach tip during the countdown, then "The can fills slowly. Turn the tap on early."
+- The first thing your friend throws, while it falls over your lawn: "Press it while it falls to catch it."
+
+When the last reveal ends, your browser saves that you've finished a match. The match end looks the same as everyone's. A rematch has no tips, your gate loses its **First Match** tag, and your lobby card loses **Try the Yard**.
+
+#### The Yard
+
+The yard is a practice lawn in the lobby, for a new player only. It has no clock. Nothing you do there reaches your friend's garden or counts.
+
+- **Try the Yard** is the main button on a new player's lobby card, online and in Practice, with **Ready** beside it. It opens the yard. The yard never opens by itself, so What Brenda Counts always comes first.
+- Returning players don't see **Try the Yard**.
+- Until you finish or skip the yard, **Try the Yard** is the yellow main button and **Ready** a plain one beside it. Afterwards they swap looks and keep their places.
+- **Try the Yard** shows even while you wait alone for your friend.
+- The lobby card goes, and your own lawn shows with nothing on it but the current step's object. No weeds sprout or spread, nothing dries, grows or wilts, nothing lying there browns the grass, and Biscuit, the wind and the shed stay away.
+- **The yard bar** takes the top bar's place: **How to Play** on the left, "The Yard" with "Step 2 of 3" in the middle, and **Skip** on the right. Focus moves to "The Yard" when it opens.
+- **The yard panel** covers the patio, which the 3 steps don't use, below the stripe ticks on its edge. The strip of patio above it shows bare slabs and the ticks; the tap, the compost bin, the shed and Biscuit stay under the panel. It holds the status line and **Ready**, or **Start** in Practice. The status line reads as the lobby card's would: "neighbour_name is ready.", "Waiting for neighbour_name to press Ready.", or "Mr Pemberton is ready." in Practice.
+- A tip moved to the patio strip, and the **Reconnecting…** banner, sit on the panel's top edge while the yard is open.
+- Each step's line shows in the tip line, with a pointer on its object. Screen readers hear it through the tip line's status.
+- The ghost finger shows each step's move as the step starts, and again after 2 failed tries in a row. Your first touch stops it. With Reduced Motion on, a still arrow shows the move instead.
+
+| Step | On the lawn | Line | Done when |
+|---|---|---|---|
+| 1 | a gnome in the middle of the lawn | "Throw the gnome over the fence." | it crosses the fence |
+| 2 | a weed rooted on the back row | "Drag the weed until it pops out.", then once it's out, "Now swipe it up hard at the fence." | it crosses the fence |
+| 3 | one clear column grown shaggy, with the column outline | "Mow slowly up and down this column." | the column stripes |
+
+- After step 3, "That's a stripe. Yard done." shows for 2s. Then the lobby card returns, with focus on **Ready**.
+- Failure cues show as they do in a match. Each failure shows its failure tip every time, for 3s, and then the step's line returns.
+- A throw that crosses the fence vanishes with a puff in the peek strip. Your neighbour sees nothing land.
+- A step's object that comes to rest on the patio or against a hedge goes back to its start after 1s, with a puff.
+- **Skip** closes the yard and brings back the lobby card, with focus on **Ready**.
+- After you finish or skip the yard, **Try the Yard** stays on the card as a plain button. It starts again from step 1.
+- **How to Play** shows the How to Play lines with the status line and **Back**, which returns you to the same step with focus on **How to Play**. The bar, the panel and the step line hide meanwhile.
+- **Ready** works at any time. Once you're both Ready, the countdown starts and the yard closes at once. A press you're still holding does nothing in the round.
+- Your **Ready** never pulses while the yard is open. Once you finish or skip it, Ready pulses as usual when your friend is Ready. A yard closed by the countdown or a lost lobby counts as neither.
+- In Practice, **Start** pulses once you finish or skip the yard, since Mr Pemberton is always ready. A returning player's **Start** never pulses.
+- While you're in the yard and not Ready, your friend's status line reads "neighbour_name is trying the yard (2 of 3)." Their screen reader hears each step change. Once you press **Ready**, they see "neighbour_name is ready." instead. Every lobby card's status line shows "neighbour_name is ready." while your friend is Ready and you aren't.
+- The yard sends only its step number, inside the lobby message both screens already send every 2s. That message also goes out as soon as the step changes, so your friend's line follows each step without waiting for the next one.
+- Leaving, **Room Full**, another tab, or a lost connection closes the yard first.
+- A reload forgets the yard, like the tips you've seen.
+- The tips a finished step replaces stay replaced for every match this page teaches, until a reload.
+
+#### Staged Tips
+
+Tips show only to a new player. Each one shows from its round on, the first time its trigger happens. A pointer marks the thing the tip is about. Urgent tips jump the queue (see The Tip Queue).
+
+| Round | When | Tip | Pointer on | Urgent |
+|---|---|---|---|---|
+| 1 | The countdown | "Throw the gnomes over the fence." | the nearest gnome, with the ghost finger | |
+| 1 | The first weed sprouts, unless you finished yard step 2 | "Drag the weed out first, then swipe it up." | that weed | |
+| 1 | The first snail crawls in | "Grab the snail before it slimes your grass." | that snail | |
+| 1 | The first thing from next door lands | "That came from next door. Throw it back." | that item | |
+| 1 | 25s in, with a patch at health 4 or less | "Hold still on brown grass until it sparkles." | the driest bare patch | |
+| 1 | Your first sparkle, until the pour stops or the patch drowns | "Sparkling means full. Stop pouring." | that patch | yes |
+| 1 | You turn the tap on | "Press the tap again within 8s, or it floods." | the tap | yes |
+| 1 | Biscuit starts circling | "Press Biscuit now, or he digs a hole." | none, his dig circle shows | yes |
+| 1 | A whole column grows shaggy, unless you finished yard step 3 | "Mow slowly up and down a whole column." | that column | |
+| 1 | Your first stripe | "Stripe! It scores if it lasts until 0:00." | that column | |
+| 1 | Your first stripe lost to something covering or marking it | "Stripe broken. Clear it and mow again." | that column | |
+| 1 | The shed opens, after its banner | "Gnomes first. Then big junk, if you dare." | none | |
+| 1 | Your first press on heavy junk on the patio, until you let go | "Slide it halfway up the lawn, then let go." | none, its grip shows | yes |
+| 1 | Your first press on heavy junk on the grass, until you let go | "Now hold it still until it lifts, then swipe up." | none, its lift ring shows | yes |
+| 1 | After 0:40, your lawn first holds no gnome | "Mow columns now. Stripes count at 0:00." | none | |
+| 2 | The countdown | the coach tip | none | |
+| 2 | The vane swings before a tailwind | "Wind in 2s. It carries your throws further." | the vane | yes |
+| 2 | The vane swings before a headwind | "Wind in 2s. It pushes your throws back." | the vane | yes |
+| 2 | The vane swings before a gust along the fence | "Wind in 2s. It pushes throws sideways." | the vane | yes |
+| 2 | Biscuit barks at an item | "Biscuit's eyeing that. Throw it first." | none, his eyeing ring shows | yes |
+| 2 | Biscuit picks something up | "Biscuit has your gnome. Press it." with the item's name | that item | yes |
+| 2 | The bag reaches 80 cuts | "Bag nearly full. Compost it or swipe it over." | the bag | |
+| 2 | The first seed clock | "Seed clock. Drag it out and throw it over." | that clock | |
+| 2 | 0:15 left, if the stripes tip hasn't shown | "Mow columns now. Stripes count at 0:00." | none | |
+| 3 | The countdown | the coach tip | none | |
+| 3 | After the coach tip | "The can fills slowly. Turn the tap on early." | the tap | |
+| 3 | Something from next door falls over your lawn | "Press it while it falls to catch it." | that item | yes |
+
+- The wind tip shows once, on the first gust's warning, with the line for that gust in your garden's frame.
+- Times such as "25s in" and "0:15 left" scale with the round's length in `?fast` rounds, like the lawn's schedules.
+- The fetch tip names what Biscuit carries: weed, dandelion, seed clock, seed, gnome or litter.
+- The broken-stripe tip skips a stripe that lapses because its grass grew back, and one hidden for a moment by something carried across.
+
+Failure tips answer your own mistakes. Each shows the first time it happens in each round of your first match, so at most 3 times. Each points at the item, weed, patch or column involved.
+
+| Trigger | Tip |
+|---|---|
+| You let go too slowly | "Let go while you're still moving." |
+| You held a light item still for 0.4s or more, moving it under 12 px, then let go | "Swipe it up to throw it. Water bare grass." |
+| You let go aimed more than 60° off the fence | "Swipe up toward the fence." |
+| You put the bag down off the compost | "Hold the bag on the compost to empty it." |
+| Your throw clips the fence, once it drops back | "Too soft. It clipped the fence." |
+| You throw within 0.4s of your last throw | "Too soon. Wait half a second." |
+| You throw while your arm is tired | "Arm's tired. Throw once a second." |
+| A flick leaves a weed rooted | "It's rooted. Drag it until it pops out." |
+| A fast flick grabs nothing, aimed within 60° of the fence, with an item within 88 px | "Missed. Press on it first, then swipe." |
+| Any other fast flick that grabs nothing | "Too fast to mow. Press, then drag slowly." |
+| A slide of heavy junk ends in a fast release | "Let go first, then hold it until it lifts." |
+| One press cuts 12 or more of a column's 16 patches, and it doesn't stripe | "Weeds or junk block this stripe. Clear them." |
+| You drown a patch | "Mud. Stop pouring at the sparkle." |
+| Your tap floods | "Flooded. Press the tap to turn it off." |
+| The mower stops on a full bag | "The bag's full. Hold it on the compost." |
+| You scalp a patch | "Too fast. Mow slower or you scalp it." |
+| Biscuit digs a hole you missed | "Hole. Press Biscuit while he circles." |
+
+A press the phone cuts off, such as for an incoming call, earns no tip.
+
+#### The Tip Line
+
+- Tips show on one line whose bottom edge sits on your lawn's top edge. It covers the fence and the bottom of the peek strip, never your lawn. That band holds nothing to press and nothing that scores.
+- The line is 18 px on phones and 20 px from 640 px wide.
+- Toasts and the **Reconnecting…** banner keep the strip under the patio props, for every player.
+- Every tip, toast and banner line fits 295 px at 18 px in the hand font. A 375 by 548 screen leaves about 297 px inside the line.
+- Presses go through both lines to the garden underneath.
+- A tip never covers what it teaches. Its spot is fixed when it shows. A tip whose object sits even partly behind the tip line then moves to the patio strip, such as a gnome in the front row whose hat pokes above the lawn's edge. The catch tip always shows there, since its item falls through the fence band.
+- The clip tip waits until the clipped item drops back, so the line never hides the teeter.
+- **Pointers:** a small marker-yellow arrow bobs above the tip's object, pointing down at it. Near the fence, where the tip line would hide it, the arrow sits below the object and points up. With Reduced Motion on, it holds still. For a column, the arrow sits above the column's row 2, and a thin marker-yellow outline runs from row 2 to the patio.
+- A tip whose object already shows its own ring gets no pointer: Biscuit's dig circle, his eyeing ring, the lift ring and the compost ring.
+- Pointers and the ghost finger are the only things tips draw over the grass.
+- The ghost finger is see-through, so the gnome stays visible under it. With Reduced Motion on, a still arrow points from the gnome to the fence for the same 2.4s.
+- Screen readers hear each tip and toast as it shows, through a polite status line.
+- Screen readers hear each round banner as one sentence, its title then its line, such as "Round 2: Dandelions. 1 weed in 4 is a dandelion. Its seed clock bursts where it lands.", and the shed banner's full sentence only once.
+
+#### The Tip Queue
+
+- One tip shows at a time. Each shows for at least 3s, and stays up to 6s while nothing waits. A 0.4s gap separates two tips.
+- Waiting tips line up in the order they happened.
+- Urgent tips jump the line. The staged table marks them, and the catch tip is one. An urgent tip can cut in on a tip that has shown for under 3s, unless that tip is urgent too and its moment is still on. The cut tip goes back to the front, unless its moment has passed.
+- A waiting tip leaves once its moment passes: Biscuit stops circling, its item lands, its gust arrives, the pour stops, or you let go. Any other staged tip leaves after 10s of waiting. Time an urgent tip spends on show doesn't count, so an interruption never costs a lesson.
+- Failure tips wait at most 2s, and only one waits at a time. A newer failure tip replaces a waiting one.
+- A tip counts as seen once it has shown for 3s. A tip with a moment also counts once that moment ends on show, if it showed from the moment's start. So the wind tip counts after its 2s warning, even when Biscuit's bark cuts in at the gust.
+- A tip that left the line unseen shows the next time its trigger happens. Beginners repeat their mistakes, so a dropped failure tip comes back soon.
+- A seen tip never shows again that match. Failure tips are the exception, once per round.
+- Tips and toasts use different lines, so a toast never pauses a tip on the tip line. A tip moved to the patio strip waits for a toast there to end, unless it's urgent. An urgent tip ends the toast early.
+- While **Reconnecting…** shows, or the page is hidden, tips wait and their time stands still.
+- Events your garden replays to catch up raise no tips. That covers a frame that jumps more than 500 ms, any step while the page is hidden, and a rebuild after a reload.
+- Catch-up still ends moments. A waiting tip whose moment passed out of sight leaves. If the tip on show loses its moment that way, urgent tips may cut in. A moment that ends out of sight counts nothing as seen.
+- The countdown tips, the ghost finger and the coach tip show only when your page's first live frame of that round falls in its countdown or its first 2s of play. So a reload mid-round never replays them.
+- At 0:00 the line clears, and waiting tips leave unseen.
+- A reload forgets which tips you've seen, since that lives only in the page.
+
+#### Show Tips and Hide Tips
+
+- The menu's tips button reads **Hide Tips** while tips are on, and **Show Tips** while they're off.
+- A new player starts with tips on. Everyone else starts with them off.
+- **Show Tips** gives you a new player's tips for this round and every earlier one, from that moment on.
+- The choice lasts until you reload.
+- Toasts, failure cues, stripe cues and reveal counts show either way.
+
+#### Failure Cues for Everyone
+
+Every self-inflicted failure shows its cause at once, for every player in every match. Failure tips only add words for a new player. Two cues show progress instead of failure: pulling a weed, and a new weed.
+
+- **Blocked throw:** the item drops with a puff, and "Too soon" or "Arm's tired" shows beside it for 0.8s. The arm ring flashes red.
+- **Pulling a weed:** while you drag a rooted weed, it leans toward your finger and a marker-yellow ring round it fills with the pull. It pops out with a dirt puff when the ring is full. With Reduced Motion on, the weed doesn't lean, and the ring still fills.
+- **Rooted weed:** a flick that leaves a weed rooted makes it shake, with a small dirt puff.
+- **Missed flick:** a fast flick that grabs nothing leaves a short swish along your finger's path: three grey dashed strokes, with a puff of dust where it began. A throw's motion lines are never grey or dashed, so a miss can't pass for a throw.
+- **New weed:** every new weed pops up through a small puff of dirt, so you see where weeds come from.
+- **Full can:** while the tap runs into a full can, water spills over its rim.
+- **Drowned patch:** the patch splashes as it turns to mud, with a `squish`.
+- **Full bag:** the bag reads "Full".
+- **Blocked stripe:** when one press cuts 12 or more of a column's 16 patches and the column still doesn't stripe, the patches that block it flash for 1s.
+- The clip's creak and "heh heh heh", Biscuit's hole and the tap's flood splash stay as they are.
+- A slow, still or sideways release has no cue of its own. The item stays where you let go, which shows it didn't fly.
+
+#### The Lobby Score Card
+
+Every lobby card, online and in Practice, shows this card between the gates and **Ready**. It replaces the old 3-line how-to.
+
+**What Brenda Counts**
+
+- Green, up to 50: how healthy your grass is.
+- Stripes, 2.5 each: a column mown short, fence to patio, with nothing on it at 0:00.
+- Tidy, up to 20: each weed, snail, hole, bit of litter or clippings patch costs half a point.
+- Junk, no limit: each gnome on your grass costs 1, a bin or mower 4, a trampoline 6.
+- Win 2 of 3 rounds. Each round lasts 3 minutes.
+
+The four names show in the marker font, the rest in the hand font. On a 375 by 548 screen the card scrolls. **Ready**, **How to Play**, **Leave** and the waiting line stay pinned below it, with **Try the Yard** beside **Ready** on a new player's card. **Ready** still pulses once your friend is Ready, except on a new player's card before they finish or skip the yard.
+
+#### How to Play
+
+- **How to Play** sits beside **Leave** on every lobby card, in the yard bar, and in the menu.
+- In the lobby and the yard it swaps the view for these lines and a **Back** button. In the menu, What Brenda Counts follows the lines, under "The round keeps going while this is open."
+- The lines:
+  1. Press a weed, snail or gnome to grab it. On bare grass, drag slowly to mow, or hold still to water.
+  2. Swipe what you grabbed up at the fence. Let go while still moving.
+  3. Drag a weed until it pops out of the ground, then swipe it up.
+  4. Throw about once a second. Throwing faster tires your arm: throws fall short, then stop.
+  5. A soft throw clips the fence and drops back onto your lawn.
+  6. Mow slowly up and down a whole column to stripe it.
+  7. Hold still on brown grass to water it. Stop when it sparkles.
+  8. Press the tap to fill the can. Press it again before it floods.
+  9. Drag the full grass bag onto the compost and hold. Or swipe it over the fence.
+  10. Press Biscuit while he circles, or he digs a hole.
+  11. At 0:40 the shed opens. Throw the gnomes, then mow your stripes back.
+  12. Heavy junk: slide it halfway up the lawn and let go. Then hold it until it lifts, and swipe up hard.
+  13. Press something while it falls over the fence to catch it.
+- The keyboard line still shows on devices without touch.
+- While lines sit below the visible area, the list's bottom edge fades out over "More below" with a down arrow. Both go once the last line is in view. Screen readers hear every line either way.
+- In the lobby, one status line stays under **Back**: the waiting line once you're Ready, or "neighbour_name is ready." once they are.
+- When the countdown starts, the lobby card goes and focus moves to the menu button in the top bar, also from How to Play.
+
+#### Reveal Counts
+
+In every reveal, both boards show what Brenda counted on each score line. The count sits between the label and the score, in soft ink hand text at the score label's size, 22 design units. That's about 12 px on a 375 px phone.
+
+| Line | Shows | For example |
+|---|---|---|
+| Green | its scale | "of 50" |
+| Stripes | striped columns | "2 columns", "1 column", "no columns" |
+| Tidy | the 2 kinds that cost most; ties go weeds, snails, holes, litter, then clippings | "15 weeds, 7 snails" |
+| Junk | the 2 kinds that cost most points | "11 gnomes", "11 gnomes, 1 trampoline" |
+| Total | nothing | |
+
+- A Tidy of 20 or a Junk of 0 shows no count.
+- Litter counts as "bits of litter" and clippings as "clippings patches", such as "3 bits of litter".
+- A count too wide to clear its label and score keeps only its first kind.
+- Each count shows from its line's count-up until the board goes.
+- The screen-reader table reads each score with its count.
+- The host counts both lawns when it judges the round, and the verdict carries the counts. So both screens show the same counts, even after a reload mid-reveal.
+- The blame line under the loser's score stays as it is.
+
+#### The Coach Tip
+
+During the countdowns of rounds 2 and 3, a new player's first tip names what cost them most last round. That time counts toward its 3s. Brenda compares your last lawn with Green 36, where every lawn starts, Tidy 20 and Junk 0. The line with the biggest loss you could have prevented picks the tip. Ties go to Junk, then Tidy, then Green.
+
+- Junk counts only what you could have prevented: every gnome, and your own heavy junk on your grass, sunk or not. Heavy junk that came from next door sank where it landed, so it's left out.
+- Tidy picks its line from its biggest kind.
+
+| Biggest loss | Tip |
+|---|---|
+| Junk, gnomes only | "Gnomes cost you 11. Throw them all over." |
+| Junk, with your own heavy junk | "Junk cost you 15. Throw it from halfway up." |
+| Tidy, mostly weeds and snails | "Weeds and snails cost you 10. Throw them." |
+| Tidy, mostly holes | "Holes cost you 4. Press Biscuit as he circles." |
+| Tidy, mostly litter or clippings | "Litter and clippings cost you 6. Clear them." |
+| Green | "Dry grass cost you 12. Water brown grass." |
+| Nothing by 3 or more, and no stripes | "No stripes. Mow a whole column slowly." |
+
+- The number is the points lost on that line, rounded like the score.
+- With nothing lost by 3 or more and at least one stripe, there's no coach tip.
+- The tip reads the verdict's counts, so a page that reloaded mid-match picks the same tip.
+
+#### Repairable Stripes
+
+- A stripe is never lost for good. Clear the column and mow it again, and the stripe comes back.
+- A column loses its stripe when more than 2 of its 16 patches are long, marked or covered:
+  - **Long:** length 2 or more.
+  - **Marked:** slime, paw prints, a scuff, clippings, a wilted weed, a scalp mark, drag ruts or a puddle.
+  - **Covered:** a weed, a snail, an item or a heap. An item in your hand or in Biscuit's mouth covers the patch under it.
+- One mowing pass clears every mark and cuts the patch short. Throw off what covers it first.
+- Holes and sunk heavy junk stay all round. A column with 3 holes, or 3 patches under a trampoline, can't stripe again that round.
+- Your screen and Brenda use the same rule, so a stripe you see at 0:00 is a stripe she counts.
+- At 0:40 the crate's gnomes cover most columns. In the last 40s you throw the gnomes over, then mow your columns again before 0:00.
+- When one of your columns gains a stripe, a light sweeps down it, fence to patio, with a soft `ding` of its own. When it loses its stripe, it flickers out. Carrying something across a stripe hides it for that moment, with no cue.
+- **Stripe ticks:** each striped column shows a small white chalk tick on the patio's edge, under the column, so you can count your stripes at a glance. When the column loses its stripe, its tick turns into a red cross for 1s, then goes. The ticks follow the same stripes as the cues.
+- **Stripe look:** a cut patch shows short mow lines until it grows long again. A striped column always looks lighter and greener than unstriped grass at the same health, in both of its alternating shades.
+- With Reduced Motion on, the stripe appears or goes without the sweep, and the `ding` stays. The red cross shows for its 1s without fading.
+- Stripe cues skip catch-up, and a new round or a reload starts them fresh.
+
+#### What a Returning Player Sees
+
+- The same lobby card, with What Brenda Counts and **How to Play**, and no **Try the Yard**.
+- **First Match** on a new neighbour's gate, and "neighbour_name is trying the yard (2 of 3)." while they're in the yard.
+- "You" in the top bar, as for everyone.
+- No tips, pointers, ghost finger, shed banner or coach tip, unless you press **Show Tips**.
+- Everything meant for every player: toasts in the patio strip, failure cues, the pull ring, new-weed puffs, stripe cues and ticks, and reveal counts.
+
+#### Beginner Playtests
+
+After each onboarding build, two cold testers play their first match. Neither has seen the game or these documents.
+
+- One joins by link on a 390 by 844 phone, against a host who plays like a regular.
+- One plays Practice Alone on a 1280 by 800 desktop.
+- A tester who can't act at human speed, such as a scripted agent, pauses the game with the dev playtest clock while it looks and decides. Game time then passes only while it acts.
+- The playtest clock works in dev builds only, in `?local` rooms and Practice. `__game.pause()` stops game time on every tab of the room at the same moment, 150 ms after the call: the round clock, both lawns, Mr Pemberton, the tip queue, the countdown and the reveal. `__game.resume()` starts it again on every tab, and the match runs on that much later.
+- While paused, the top bar's clock reads "Paused", presses do nothing, and a press held as the pause begins ends as if the phone cut it off. Real Pusher rooms ignore the playtest clock.
+
+The game log records their moves. Each move is judged on the tester's tries from round 2 on. A move they don't try after round 1 is judged on round 1. A tester fails a basic move when:
+
+| Move | Fails when |
+|---|---|
+| Throw | under half of their throws clear the fence |
+| Pull a weed | flicks that leave a weed rooted outnumber weeds pulled out |
+| Mow | none of their mowing presses ever cuts 12 or more of a column's 16 patches |
+| Water | they never pour, or they drown more patches than they bring to a sparkle |
+
+- **The first run, on 2026-10-14:** the link joiner never mowed a whole column in their first match, so the yard was built. The Practice tester passed every move.
+- If a tester fails a basic move after the yard, the lead reworks how the yard teaches that move.
+- The log also records:
+  - whether each tester can name the four score lines, asked at round 1's "Time's up." before the scores count up;
+  - how many of the crate's 12 gnomes they throw off in rounds 2 and 3;
+  - that no tip showed for under 3s;
+  - whether they opened the yard, which steps they finished, and how long it took.
 
 ### Length
 
@@ -418,9 +790,10 @@ After the last reveal, Brenda pins the Best Kept Garden rosette on the winner's 
 | Catch | Press something falling over the fence | Click it |
 | Lift heavy junk | Press and hold 0.6s until it lifts, then swipe | Click and hold, then drag and release |
 | Drag junk forward | Press it and slide at once | Click it and drag at once |
-| Mow | Press grass and rub back and forth | Click grass and drag back and forth |
+| Mow | Press grass and drag up and down a column | Click grass and drag up and down a column |
 | Water | Press and hold still on grass; slide slowly | Click and hold still on grass; move slowly |
 | Turn the tap on or off | Tap the tap | Click the tap |
+| Show or hide tips | Menu, then **Show Tips** or **Hide Tips** | The same, with the mouse |
 | Empty the grass bag | Drag the bag onto the compost bin and hold, or swipe it at the fence | The same, with the mouse |
 | Stop Biscuit digging | Tap Biscuit while he circles | Click Biscuit |
 | Take back a fetch | Press the item in Biscuit's mouth | Click it |
@@ -478,6 +851,7 @@ After the last reveal, Brenda pins the Best Kept Garden rosette on the winner's 
 - `lawn` also carries your 6 own-fault counts and your chores: bag cuts, can level, the tap and the arm meter. A rebuild after a reload restores them all.
 - `final` carries the 6 own-fault counts for Brenda's line too. It also has a 2-byte marker for every item, so the reveal can draw both true lawns. Snails mid-crawl and seed clocks count like any other item.
 - `result` carries the host's own `final`, so the guest can draw the host's true lawn too.
+- `sync` carries a `first` flag while its sender is a new player, so the friend's lobby shows **First Match**. Pages that don't know the flag ignore it.
 - A `throw` is dropped when its id was seen before, or when it was sent over 6s ago. Throw ids join the session id and a counter.
 - Pusher never echoes your own events, so your browser applies its own actions at once.
 - Players ignore events from anyone but the other seated player.

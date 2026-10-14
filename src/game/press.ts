@@ -6,6 +6,8 @@ import {
   POUR_TO_MOW_MS,
   POUR_TO_MOW_PX,
   RELEASE_PAIR_MIN_MS,
+  STILL_HOLD_MS,
+  STILL_MOVE_PX,
   THROW_MAX_ANGLE_DEG,
   THROW_MIN_PX
 } from './tuning'
@@ -17,30 +19,61 @@ export interface ReleaseSample {
   dirY: number
 }
 
+/**
+ * Why letting go put an item down: too slow, aimed more than 60 degrees off the fence,
+ * held still, or a press the browser cancelled, such as for an incoming call.
+ */
+export type ReleaseReason = 'slow' | 'angle' | 'still' | 'cancel'
+
+/** What the press did before you let go, for naming why it put the item down. */
+export interface PressFacts {
+  /** The browser cancelled the press, such as for an incoming call. */
+  cancelled?: boolean
+  /** How long you held it, in ms. */
+  heldMs?: number
+  /** The furthest the press moved from where it started, in screen pixels. */
+  movedPx?: number
+}
+
 /** What letting go of a held item does. */
 export type Release =
   | { type: 'throw'; speedPx: number; dirX: number; dirY: number }
-  | { type: 'putDown' }
+  | { type: 'putDown'; reason: ReleaseReason }
 
 const MIN_COS = Math.cos((THROW_MAX_ANGLE_DEG * Math.PI) / 180)
 
 /**
  * The one release rule: let go at 400 px/s or faster, aimed within 60 degrees of straight
  * at the fence, and you throw. Anything slower or further off, or a press the browser
- * cancelled, puts the item down.
+ * cancelled, puts the item down with its reason. A put-down after holding 0.4s or more
+ * without moving 12 px says `still`: that press was most likely meant for watering.
  */
-export function releaseRule(sample: ReleaseSample, cancelled = false): Release {
-  if (cancelled || sample.speedPx < THROW_MIN_PX) return { type: 'putDown' }
+export function releaseRule(
+  sample: ReleaseSample,
+  { cancelled = false, heldMs = 0, movedPx = Infinity }: PressFacts = {}
+): Release {
+  if (cancelled) return { type: 'putDown', reason: 'cancel' }
+  const still = heldMs >= STILL_HOLD_MS && movedPx < STILL_MOVE_PX
+  if (sample.speedPx < THROW_MIN_PX)
+    return { type: 'putDown', reason: still ? 'still' : 'slow' }
+  if (!towardFence(sample.dirX, sample.dirY))
+    return { type: 'putDown', reason: still ? 'still' : 'angle' }
   const len = Math.hypot(sample.dirX, sample.dirY)
-  // The fence is straight up the screen, at negative y.
-  if (len === 0 || -sample.dirY / len < MIN_COS - 1e-9)
-    return { type: 'putDown' }
   return {
     type: 'throw',
     speedPx: sample.speedPx,
     dirX: sample.dirX / len,
     dirY: sample.dirY / len
   }
+}
+
+/**
+ * True when a screen direction aims within 60 degrees of straight at the fence, which is
+ * up the screen. A zero direction aims nowhere.
+ */
+export function towardFence(dirX: number, dirY: number): boolean {
+  const len = Math.hypot(dirX, dirY)
+  return len > 0 && -dirY / len >= MIN_COS - 1e-9
 }
 
 /** What a press on grass turns into. `snap` means a fast flick that missed an item. */

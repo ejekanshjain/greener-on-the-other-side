@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 
+import { countParts, type Counted } from '../game/counts'
 import { matchResult, type Score } from '../game/score'
 import { matchLine, roundLine, type RoundResult } from '../net/judge'
 import { shortName } from '../net/names'
@@ -51,6 +52,14 @@ export function Verdict({
   const [mine, theirs] = view.host
     ? result.scores
     : [result.scores[1], result.scores[0]]
+  const [myCounts, theirCounts] = view.host
+    ? result.counts
+    : [result.counts[1], result.counts[0]]
+  /** A score with what Brenda counted, such as "8, 3 columns". */
+  const cell = (score: Score, counted: Counted, key: keyof Score) => {
+    const parts = key === 'total' ? [] : countParts(key, score, counted)
+    return parts.length ? `, ${parts.join(', ')}` : ''
+  }
   const match = result.over
     ? matchResult(result.tally, result.totals, result.round + 1)
     : null
@@ -82,11 +91,13 @@ export function Verdict({
               }
             >
               <th className="text-left font-normal">{label}</th>
-              <td className="text-right" data-testid={`mine-${key}`}>
-                {mine[key]}
+              <td className="text-right">
+                <span data-testid={`mine-${key}`}>{mine[key]}</span>
+                {cell(mine, myCounts, key)}
               </td>
-              <td className="text-right" data-testid={`theirs-${key}`}>
-                {theirs[key]}
+              <td className="text-right">
+                <span data-testid={`theirs-${key}`}>{theirs[key]}</span>
+                {cell(theirs, theirCounts, key)}
               </td>
             </tr>
           ))}

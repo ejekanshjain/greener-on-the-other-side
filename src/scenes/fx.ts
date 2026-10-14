@@ -5,7 +5,7 @@ import { settings } from '../shared/settings'
 import { LAWN } from './layout'
 
 /** A puff of dust, dirt, clippings or spray, in design units. */
-interface Puff {
+export interface Puff {
   x: number
   y: number
   /** Loop time it appeared. */
@@ -23,14 +23,18 @@ const DUST = 'rgb(196 176 132)'
 const DIRT = 'rgb(110 80 44)'
 const CLIPPINGS = 'rgb(120 168 70)'
 const SPRAY = 'rgb(150 196 230)'
+const MUD = 'rgb(122 92 58)'
 
 /**
- * The garden's juice: dust puffs where things land, dirt where Biscuit digs, clippings
- * where a heap lands, spray on a flood, and a screen shake when heavy junk sinks in.
- * Under Reduced Motion the puffs fade without growing and the screen never shakes.
+ * The garden's juice: dust puffs where things land, a blocked throw drops, a flick misses
+ * or the yard puts a step's object back; dirt where Biscuit digs, or a weed stays rooted,
+ * pops out or comes up; clippings where a heap lands; spray on a flood; a muddy splash
+ * where a patch drowns; and a screen shake when heavy junk sinks in. Under Reduced Motion
+ * the puffs fade without growing and the screen never shakes.
  */
 export class Effects {
-  private readonly puffs: Puff[] = []
+  /** Puffs still fading out, oldest first. */
+  readonly puffs: Puff[] = []
   private shakeFrom = 0
   private shakeUntil = 0
   private shakeAmp = 0
@@ -61,6 +65,30 @@ export class Effects {
         case 'flood':
           for (const patch of event.patches)
             this.puffAt(patch, time, 1.1, SPRAY)
+          break
+        case 'drown':
+          this.puffAt(event.patch, time, 1, SPRAY)
+          this.puffAt(event.patch, time, 0.6, MUD)
+          break
+        case 'tired':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.6, DUST)
+          break
+        case 'rooted':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.45, DIRT)
+          break
+        case 'yank':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.6, DIRT)
+          break
+        // Every new weed pops up through dirt, so you see where weeds come from.
+        case 'sprout':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.45, DIRT)
+          break
+        case 'miss':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.4, DUST)
+          break
+        // The yard puts a stuck step object back where its step began.
+        case 'putBack':
+          this.puff(LAWN.x + event.lx, LAWN.y + event.ly, time, 0.7, DUST)
           break
         default:
           break
@@ -142,10 +170,21 @@ export class Effects {
   ): void {
     if (patch < 0) return
     const c = patchCenter(patch)
+    this.puff(LAWN.x + c.lx, LAWN.y + c.ly, time, size, color)
+  }
+
+  /** A puff at design point (x, y). */
+  private puff(
+    x: number,
+    y: number,
+    time: number,
+    size: number,
+    color: string
+  ): void {
     if (this.puffs.length >= PUFF_CAP) this.puffs.shift()
     this.puffs.push({
-      x: LAWN.x + c.lx,
-      y: LAWN.y + c.ly,
+      x,
+      y,
       at: time,
       size,
       color,

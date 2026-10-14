@@ -10,6 +10,7 @@ import {
   COMPOST_RECT,
   HEALTH_START,
   HEAP_CUTS,
+  MOWER_POS,
   TICK_MS
 } from './tuning'
 import { Mess, type Crossing, type GardenEvent } from './types'
@@ -72,6 +73,23 @@ describe('grass bag', () => {
   it('lifts only with a quarter load or more', () => {
     expect(garden(23).bagHit(BAG_POS.lx, BAG_POS.ly, 5)).toBe(false)
     expect(garden(24).bagHit(BAG_POS.lx, BAG_POS.ly, 5)).toBe(true)
+  })
+
+  it('ignores a press on a bag too empty to lift, instead of poking the mower', () => {
+    const g = garden(23)
+    expect(g.mowerHit(BAG_POS.lx, BAG_POS.ly, 20)).toBe(false)
+    expect(g.mowerHit(MOWER_POS.lx, MOWER_POS.ly, 20)).toBe(true)
+  })
+
+  it('says why the bag went back: off the compost, or a cancelled press', () => {
+    const reasons = (['slow', 'angle', 'cancel'] as const).map(reason => {
+      const g = garden(60)
+      lift(g, 200, 600)
+      g.command({ type: 'release', release: { type: 'putDown', reason } })
+      const down = step(g).find(e => e.type === 'putDown')
+      return down?.type === 'putDown' ? down.reason : null
+    })
+    expect(reasons).toEqual(['bag', 'bag', 'cancel'])
   })
 
   it('empties after 1.5s held on the compost bin', () => {

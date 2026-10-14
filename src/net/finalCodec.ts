@@ -24,7 +24,7 @@ export const FINAL_MAX_CHARS =
  * Packs a final into bytes, then base64 (PLAN.md 2.6): version, round, 192 patch bytes,
  * 8 counts, 6 own-fault counts capped at 255, the health sum in 2 bytes, then a count
  * and 2 bytes per item: its patch, and its item code with the litter look in bits 4
- * and 5 and a sunk flag in bit 6.
+ * and 5, a sunk flag in bit 6 and, for heavy junk from next door, bit 7.
  */
 export function encodeFinal(report: FinalReport): string {
   const markers = report.markers.slice(0, FINAL_MARKER_MAX)
@@ -41,7 +41,11 @@ export function encodeFinal(report: FinalReport): string {
   bytes[i++] = markers.length
   for (const m of markers) {
     bytes[i++] = m.patch
-    bytes[i++] = itemCode(m.kind) | ((m.look & 3) << 4) | (m.sunk ? 64 : 0)
+    bytes[i++] =
+      itemCode(m.kind) |
+      ((m.look & 3) << 4) |
+      (m.sunk ? 64 : 0) |
+      (m.theirs ? 128 : 0)
   }
   return toBase64(bytes)
 }
@@ -73,7 +77,8 @@ export function decodeFinal(text: string): FinalReport | null {
       patch,
       kind,
       look: (type >> 4) & 3,
-      sunk: (type & 64) !== 0
+      sunk: (type & 64) !== 0,
+      theirs: (type & 128) !== 0
     })
   }
   return { round, patches, counts, healthSum, blame, markers }

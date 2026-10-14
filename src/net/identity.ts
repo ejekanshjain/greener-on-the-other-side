@@ -50,6 +50,29 @@ export function saveName(name: string): void {
   writeStorage(NAME_KEY, name)
 }
 
+const FINISHED_KEY = 'greener-finished'
+
+/**
+ * True once this browser has finished a match Brenda decided. It's the one yes/no fact
+ * the game keeps beside your name and id, and it decides who gets a new player's tips.
+ */
+export function hasFinishedMatch(): boolean {
+  return readStorage(FINISHED_KEY) === '1'
+}
+
+/** Remembers that this browser finished a match. */
+export function saveFinishedMatch(): void {
+  writeStorage(FINISHED_KEY, '1')
+}
+
+/**
+ * Whether this page counts as a new player right now: the dev `?first` override when
+ * given, else the stored fact.
+ */
+export function isNewPlayer(override: boolean | null): boolean {
+  return override ?? !hasFinishedMatch()
+}
+
 const LOCAL_NAME_KEY = 'greener-local-name'
 
 /**

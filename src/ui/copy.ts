@@ -15,11 +15,29 @@ export const COPY = {
   comeBack: 'Come back here after you send it.',
   shareText: 'Come and throw gnomes at my lawn.',
   waitingReady: (name: string) => `Waiting for ${name} to press Ready.`,
-  howTo: [
-    'Throw every weed, snail and gnome over the fence.',
-    'Rub the grass to mow. Hold still to water.',
-    'Brenda judges both lawns when the clock runs out.'
+  /** What Brenda Counts: each score line's name, then what it counts. */
+  brendaCounts: [
+    { name: 'Green', line: 'up to 50: how healthy your grass is.' },
+    {
+      name: 'Stripes',
+      line: '2.5 each: a column mown short, fence to patio, with nothing on it at 0:00.'
+    },
+    {
+      name: 'Tidy',
+      line: 'up to 20: each weed, snail, hole, bit of litter or clippings patch costs half a point.'
+    },
+    {
+      name: 'Junk',
+      line: 'no limit: each gnome on your grass costs 1, a bin or mower 4, a trampoline 6.'
+    }
   ],
+  brendaCountsTitle: 'What Brenda Counts',
+  brendaRounds: 'Win 2 of 3 rounds. Each round lasts 3 minutes.',
+  isReady: (name: string) => `${name} is ready.`,
+  tryYard: 'Try the Yard',
+  yardTitle: 'The Yard',
+  yardStep: (step: number) => `Step ${step} of 3`,
+  skip: 'Skip',
   menuNote: 'The round keeps going while this is open.',
   practiceLoading: 'Mr Pemberton is putting his boots on…',
   practiceMoods:
@@ -28,15 +46,21 @@ export const COPY = {
   motionHint:
     'Stops screen shake. Brenda fades the tint instead of peeling it.',
   howToPlay: [
-    'Swipe weeds, snails and gnomes at the fence. Let go while still moving.',
+    'Press a weed, snail or gnome to grab it. On bare grass, drag slowly to mow, or hold still to water.',
+    'Swipe what you grabbed up at the fence. Let go while still moving.',
+    'Drag a weed until it pops out of the ground, then swipe it up.',
+    'Throw about once a second. Throwing faster tires your arm: throws fall short, then stop.',
     'A soft throw clips the fence and drops back onto your lawn.',
-    'Rub the grass to mow stripes. Hold still on brown grass to water it.',
-    'Press the tap to refill the can. Turn it off before it floods.',
-    'Drag the full grass bag to the compost, or swipe it over the fence.',
-    'Tap Biscuit while he circles, or he digs a hole.',
-    'At 0:40 the shed opens. Hold heavy junk to lift it, then throw it.',
-    'Brenda scores Green, Stripes, Tidy and Junk. Win 2 rounds to take the match.'
+    'Mow slowly up and down a whole column to stripe it.',
+    'Hold still on brown grass to water it. Stop when it sparkles.',
+    'Press the tap to fill the can. Press it again before it floods.',
+    'Drag the full grass bag onto the compost and hold. Or swipe it over the fence.',
+    'Press Biscuit while he circles, or he digs a hole.',
+    'At 0:40 the shed opens. Throw the gnomes, then mow your stripes back.',
+    'Heavy junk: slide it halfway up the lawn and let go. Then hold it until it lifts, and swipe up hard.',
+    'Press something while it falls over the fence to catch it.'
   ],
+  moreBelow: 'More below',
   keys: 'F shakes your fist. Escape opens the menu.',
   leaveTitle: 'Leave the Match?',
   leaveForfeit: 'Your neighbour wins.',
@@ -46,9 +70,11 @@ export const COPY = {
   walkedOver: (name: string) => `You didn't come back in time. ${name} wins.`,
   noContest: 'The line went dead. Nobody wins.',
   reconnecting: 'Reconnecting…',
+  paused: 'Paused',
   upright: 'Turn your phone upright.',
   keepsGoing: 'The round keeps going.',
   away: 'Away',
+  firstMatch: 'First Match',
   gone: 'Gone',
   left: (name: string) => `${name} left.`,
   waitingRematch: (name: string) => `Waiting for ${name}.`,

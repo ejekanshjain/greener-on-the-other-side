@@ -25,6 +25,10 @@ export function sampleOf(t0: number, th: number, t1: number): ClockSample {
  * The shared clock. The host's own clock is the reference, so its offset stays 0. The
  * guest keeps the sample with the shortest round trip, ignoring any over 400 ms. When a
  * whole join batch is too slow, the next batch is kept anyway and `rough` flags it.
+ *
+ * Dev playtests can pause it: game time stands still from one shared moment to another,
+ * then runs on behind the shared clock by every span it stood still. Pages that pause at
+ * the same moments keep agreeing, and pongs carry the unpaused time.
  */
 export class ClockSync {
   offset = 0
@@ -34,12 +38,80 @@ export class ClockSync {
   /** True when the clock had to use a slow sample. */
   rough = false
   private batch: ClockSample[] = []
+  /** Shared time the current pause starts and ends, or Infinity. */
+  private stopAt = Infinity
+  private goAt = Infinity
+  /** Ms the clock stood still in finished pauses. */
+  private held = 0
 
   constructor(private readonly localNow: () => number) {}
 
-  /** Shared-clock time now. */
+  /** Game time now: the shared clock, standing still through a pause. */
   now(): number {
+    const shared = this.shared()
+    if (shared < this.stopAt) return shared - this.held
+    if (shared < this.goAt) return this.stopAt - this.held
+    return shared - this.held - (this.goAt - this.stopAt)
+  }
+
+  /** The shared clock as it really runs, pauses ignored: what pongs carry. */
+  shared(): number {
     return this.localNow() + this.offset
+  }
+
+  /** True while a pause holds the clock still. */
+  get paused(): boolean {
+    const shared = this.shared()
+    return shared >= this.stopAt && shared < this.goAt
+  }
+
+  /** Ms the clock has stood still in pauses so far. */
+  get heldMs(): number {
+    this.settle()
+    const shared = this.shared()
+    return this.held + Math.max(0, Math.min(shared, this.goAt) - this.stopAt)
+  }
+
+  /**
+   * Stops game time at shared time `at`. Before the pause begins, the earliest time asked
+   * for wins, so two tabs pausing at once agree; once it has begun, it stays.
+   */
+  pause(at: number): void {
+    this.settle()
+    const shared = this.shared()
+    if (shared >= this.stopAt) return
+    this.stopAt = Math.min(this.stopAt, Math.max(at, shared))
+  }
+
+  /**
+   * Runs game time again from shared time `at`, or as the pause begins if that's later.
+   * The earliest time asked for wins, as for `pause`.
+   */
+  resume(at: number): void {
+    this.settle()
+    if (this.stopAt === Infinity) return
+    this.goAt = Math.min(this.goAt, Math.max(at, this.stopAt))
+  }
+
+  /** The pause as a page that joins late should copy it. */
+  pauseState(): { stopAt: number; goAt: number; held: number } {
+    this.settle()
+    return { stopAt: this.stopAt, goAt: this.goAt, held: this.held }
+  }
+
+  /** Copies another page's pauses, so a reloaded page keeps the same game time. */
+  copyPause(state: { stopAt: number; goAt: number; held: number }): void {
+    this.stopAt = state.stopAt
+    this.goAt = state.goAt
+    this.held = state.held
+  }
+
+  /** Folds a finished pause into `held`. */
+  private settle(): void {
+    if (this.goAt === Infinity || this.shared() < this.goAt) return
+    this.held += this.goAt - this.stopAt
+    this.stopAt = Infinity
+    this.goAt = Infinity
   }
 
   /** This tab's own clock, with any dev skew. */

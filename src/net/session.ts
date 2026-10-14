@@ -1,7 +1,9 @@
+import { coachLine } from '../game/counts'
 import { arrivalFlight } from '../game/flight'
 import { Garden, type GardenOptions } from '../game/garden'
 import { playStart, type MatchPhase } from '../game/match'
 import { roundSeed } from '../game/seed'
+import { StripeWatch } from '../game/stripeWatch'
 import { rebuildGarden } from '../game/rebuild'
 import { finalReport, lawnReport, type Marker } from '../game/report'
 import {
@@ -14,7 +16,18 @@ import {
   LAWN_EVERY_MS,
   LAWN_W
 } from '../game/tuning'
-import { tipFor, TIPS, TOASTS, type TipId } from '../game/tips'
+import {
+  freshRound,
+  liveStep,
+  TipQueue,
+  type ShownTip,
+  type TipRequest,
+  type TipSpot
+} from '../game/tipQueue'
+import { SHED_BANNER, tipKind, TOASTS, type TipId } from '../game/tips'
+import { nearestGnome, SHED_BANNER_MS, TipTriggers } from '../game/tipTriggers'
+import type { FingerPlay } from '../scenes/ghostFinger'
+import { tipSpotFor } from '../scenes/tipPointer'
 import {
   itemFromCode,
   type ClipRecord,
@@ -29,6 +42,7 @@ import { clamp, hash01 } from '../shared/math'
 import { createStore, shallowEqual, type Store } from '../shared/store'
 import { ClockSync, JOIN_PINGS, PING_GAP_MS, sampleOf } from './clockSync'
 import { netFlags } from './devNet'
+import { isNewPlayer, saveFinishedMatch } from './identity'
 import { decodeBundle, newSessionId, StaleFilter } from './envelope'
 import { encodeFinal } from './finalCodec'
 import type { RoundResult } from './judge'
@@ -38,13 +52,16 @@ import { Limiter } from './limiter'
 import { Listeners } from './listeners'
 import { NeighbourView } from './neighbour'
 import { Outbox } from './outbox'
+import { YardRun } from './yardRun'
 import { isClockMsg, type MatchInfo, type Msg } from './protocol'
 import {
+  decidedMatchEnd,
   initialRoom,
   hostSide,
   isHost,
   matchPhase,
   peerHere,
+  peerYard,
   roomStep,
   tallyOf,
   type ArrivalKind,
@@ -60,6 +77,23 @@ import {
   throwId
 } from './throwCodec'
 import type { ConnStatus, PayloadKind, Transport } from './types'
+
+/** The session's small heads-up store. */
+export interface Hud {
+  /** A new player's tip on show, at its spot. */
+  tip: Line | null
+  /** A toast in the patio strip, for every player. */
+  toast: Line | null
+  /** The shed banner over the peek strip in round 1 of a first match. */
+  banner: Banner | null
+  tips: TipsChoice
+  /** When Shake Fist works again, in real time. */
+  fistUntil: number
+  /** The lobby's yard while it's open: its step, from 0, or 3 once done, and whether How to Play covers it. */
+  yard: { step: number; help: boolean } | null
+  /** True once you've finished or skipped the yard on this page. */
+  yardDone: boolean
+}
 
 /** What React shows about the room. It changes on events, never per frame. */
 export interface RoomView {
@@ -78,6 +112,10 @@ export interface RoomView {
     /** Shared time they left the member list, or -1, for the Gone countdown. */
     unlistedSince: number
     away: boolean
+    /** They're a new player, so their lobby gate shows First Match. */
+    first: boolean
+    /** Their yard step, 1 to 3, while they try the yard and aren't Ready, else 0. */
+    yard: number
   } | null
   myReady: boolean
   myRematch: boolean
@@ -93,20 +131,34 @@ export interface RoomView {
   announce: string
   /** True in Practice, against Mr Pemberton. */
   practice: boolean
+  /** Whether this page counts as a new player right now, from the stored fact. */
+  newPlayer: boolean
+  /** Whether this page teaches the current match as a new player's first. */
+  firstMatch: boolean
 }
 
-/** One line over the patio: a first-time tip or a toast. */
-export interface Note {
-  id: number
+/** A line on screen: a new player's tip at its spot, or a toast in the patio strip. */
+export interface Line {
+  key: number
   text: string
-  kind: 'tip' | 'toast'
+  spot: TipSpot
 }
+
+/** A banner's one line on screen and the sentence screen readers hear. */
+export interface Banner {
+  key: number
+  text: string
+  spoken: string
+}
+
+/** Whether tips show: a new player's default, or the menu's Show Tips or Hide Tips. */
+export type TipsChoice = 'auto' | 'on' | 'off'
 
 /** How a session behaves beyond the room flow. */
 export interface SessionOptions {
   /** Plays no sounds: Mr Pemberton's own session in Practice. */
   muted?: boolean
-  /** Practice: tips in every round, and Mr Pemberton laughs at your clips himself. */
+  /** Practice: Mr Pemberton laughs at your clips himself. */
   practice?: boolean
 }
 
@@ -123,10 +175,11 @@ export interface TransportFactory {
 }
 
 const PUMP_MS = 50
-/** How long each kind of line over the patio stays up. */
-const NOTE_MS = { tip: 5000, toast: 2600 } as const
-/** A tip stays up at least this long before a newer tip replaces it. */
-const NOTE_MIN_MS = 1500
+/** The shed banner's line, and the sentence screen readers hear instead. */
+const shedBanner = { text: SHED_BANNER.line, spoken: SHED_BANNER.spoken }
+
+/** A toast stays up this long. */
+const TOAST_MS = 2600
 const TICK_MS = 250
 const JOIN_BATCH_WAIT_MS = 1000
 const JOIN_RETRY_MS = 2000
@@ -160,13 +213,18 @@ export interface LoggedEvent {
 export class RoomSession {
   readonly sessionId = newSessionId()
   readonly view: Store<RoomView>
-  /** The line over the patio, and when Shake Fist works again (real time). It changes on events, never per frame. */
-  readonly hud: Store<{ note: Note | null; fistUntil: number }> = createStore<{
-    note: Note | null
-    fistUntil: number
-  }>({
-    note: null,
-    fistUntil: 0
+  /**
+   * The tip and toast on screen, whether tips show, and when Shake Fist works again (real
+   * time). It changes on events, never per frame.
+   */
+  readonly hud: Store<Hud> = createStore<Hud>({
+    tip: null,
+    toast: null,
+    banner: null,
+    tips: 'auto',
+    fistUntil: 0,
+    yard: null,
+    yardDone: false
   })
   readonly clock = new ClockSync(() => Date.now() + netFlags.skew)
   readonly limiter = new Limiter()
@@ -203,6 +261,9 @@ export class RoomSession {
   private readonly pings = new Map<number, number>()
   private joinBatch: { attempt: number; endsAt: number } | null = null
   private readonly gardenEvents = new Listeners<[readonly GardenEvent[]]>()
+  /** Columns that gained and lost a stripe in a live step, for the stripe cues. */
+  private readonly stripeEvents = new Listeners<[number, number]>()
+  private readonly stripeWatch = new StripeWatch()
   private closed = false
   private opening = false
   /** The match and round whose reveal already had its resample ping. */
@@ -248,14 +309,27 @@ export class RoomSession {
   } | null = null
   /** Real time of the last frame, so a hidden page's timer knows to step the garden. */
   private lastFrameAt = 0
-  private noteId = 0
-  private nextNote: Note | null = null
-  private noteShownAt = 0
-  /** Tips already shown in this match, and the match they belong to. */
-  private readonly tipsShown = new Set<TipId>()
-  private tipsMatch = ''
-  /** Hide Tips turns tips off until the page reloads. */
-  tipsHidden = false
+  /** A new player's tips, one at a time, on tip time that stands still while paused. */
+  private readonly tipQueue = new TipQueue()
+  private toastKey = 0
+  private toastUntil = 0
+  /** The match and round the tip queue was last reset for. */
+  private tipsFor = ''
+  /** The current round garden's tip triggers. */
+  private triggers: TipTriggers | null = null
+  /** A new player's ghost finger on show, in real time, for the scene. */
+  ghost: FingerPlay | null = null
+  /** The ghost finger plays once more when round 1's play starts. */
+  private ghostAgain = 0
+  private bannerUntil = 0
+  /** The round whose first live frame was seen, and whether it came in time for its countdown tips. */
+  private liveFor = ''
+  private freshStart = false
+  /** The match `first` was read for, and whether this page is new for it. */
+  private firstFor = ''
+  private first = false
+  /** The match whose end already saved the finished-match fact. */
+  private finishedFor = ''
   /** Mr Pemberton in Practice, run each frame after this session's own update. */
   companion: Companion | null = null
   /** A bot playing this session's garden: Mr Pemberton's hands, or dev autopilot. */
@@ -264,6 +338,16 @@ export class RoomSession {
   readonly theirClips = new Listeners<[number]>()
   /** Room screens showing this session; the last one to go leaves the room. */
   private holders = 0
+  /** The lobby's yard while it's open. */
+  private yardRun: YardRun | null = null
+  /** The yard's line as the tip on show, made again only when it changes. */
+  private yardTip: ShownTip | null = null
+  /** The yard step the room last heard of, so a change goes out in a `sync` at once. */
+  private sentYardStep = 0
+  /** How the last yard visit ended, for the dev `yard()` hook. */
+  yardEnd: { finished: boolean; skipped: boolean } | null = null
+  /** Round 1 tips that finished yard steps already taught, marked seen in each new match. */
+  readonly yardLearned = new Set<TipId>()
 
   constructor(
     readonly code: string,
@@ -273,6 +357,13 @@ export class RoomSession {
     private readonly options: SessionOptions = {}
   ) {
     this.neighbour.pemberton = options.practice === true
+    this.tipQueue.onEnd = (tip, shownMs, why) =>
+      this.logEvent('noteEnd', {
+        text: tip.text,
+        shownMs: Math.round(shownMs),
+        why,
+        seen: this.tipSeen(tip.id)
+      })
     this.state = initialRoom(me, arrival, this.clock.now())
     this.view = createStore<RoomView>(this.toView(''))
     this.garden = this.previewGarden()
@@ -388,6 +479,8 @@ export class RoomSession {
   /** Closes the transport and stops every timer. The session can't reopen. */
   close(): void {
     if (this.closed) return
+    // Leaving closes the yard first, so nothing of it outlives the room.
+    this.closeYard(false)
     this.closed = true
     this.loops.stop()
     this.outbox.flush(this.clock.now())
@@ -423,12 +516,191 @@ export class RoomSession {
     return this.phaseCache
   }
 
+  /**
+   * The garden your presses reach: the round's during play, or the yard's while it's open.
+   * None during a playtest pause.
+   */
+  inputGarden(): Garden | null {
+    if (this.paused) return null
+    return this.playableGarden() ?? this.yardRun?.garden ?? null
+  }
+
+  /** True while a dev playtest pause holds game time still. */
+  get paused(): boolean {
+    return this.clock.paused
+  }
+
+  /** Whether dev playtest pauses work here: `?local` rooms and Practice, never real Pusher. */
+  get pausable(): boolean {
+    return (
+      process.env.NODE_ENV !== 'production' && this.makeTransport.local === true
+    )
+  }
+
+  /**
+   * Dev playtest clock: game time stops at shared time `at`, for the rounds, both gardens,
+   * Mr Pemberton, the tip queue, the countdown and the reveal. Returns false where pauses
+   * don't work.
+   */
+  pauseAt(at: number): boolean {
+    if (!this.pausable) return false
+    this.clock.pause(at)
+    this.logEvent('pause', { at })
+    return true
+  }
+
+  /** Dev playtest clock: game time runs again from shared time `at`. */
+  resumeAt(at: number): boolean {
+    if (!this.pausable) return false
+    this.clock.resume(at)
+    this.logEvent('resume', { at })
+    return true
+  }
+
+  /** True while the lobby's yard is open. */
+  get yardOpen(): boolean {
+    return this.yardRun !== null
+  }
+
+  /** The yard's steps while it's open, for the dev tools. */
+  get yardSteps(): YardRun['steps'] | null {
+    return this.yardRun?.steps ?? null
+  }
+
+  /** The yard may stay open only on a seated page in the lobby, and never in Mr Pemberton's. */
+  private yardAllowed(): boolean {
+    return (
+      !this.muted &&
+      this.state.phase === 'lobby' &&
+      this.state.admission === 'seated' &&
+      this.gardenRound < 0
+    )
+  }
+
+  /**
+   * Opens the lobby's yard at step 1: a practice lawn on this page alone, which no message,
+   * replay or score ever sees.
+   */
+  openYard(): void {
+    if (this.yardRun || !this.yardAllowed()) return
+    const run = new YardRun(this.previewSeed(), performance.now())
+    this.yardRun = run
+    this.yardTip = null
+    this.garden = run.garden
+    this.ghost = run.ghost
+    this.hud.set({ yard: { step: 0, help: false }, tip: null })
+    this.logEvent('yardOpen')
+  }
+
+  /**
+   * Closes the yard and brings back the lobby's still lawn. `skipped` says you left it
+   * before its last step; a match starting closes it with neither.
+   */
+  closeYard(skipped = true): void {
+    const run = this.yardRun
+    if (!run) return
+    this.yardRun = null
+    this.yardTip = null
+    this.yardEnd = { finished: run.finished, skipped: skipped && !run.finished }
+    for (const id of run.learned) this.yardLearned.add(id)
+    this.ghost = null
+    this.loops.sync(null)
+    if (this.gardenRound < 0) this.garden = this.previewGarden()
+    this.hud.set({
+      yard: null,
+      tip: null,
+      yardDone:
+        this.hud.get().yardDone || this.yardEnd.finished || this.yardEnd.skipped
+    })
+    this.logEvent('yardClose', this.yardEnd)
+  }
+
+  /** How to Play over the yard: it covers the yard's bar, panel and line until Back. */
+  yardHelp(open: boolean): void {
+    const yard = this.hud.get().yard
+    if (yard && yard.help !== open)
+      this.hud.set({ yard: { ...yard, help: open } })
+  }
+
+  /** The yard step this page sends in its lobby `sync`, 1 to 3, or 0 while the yard is shut. */
+  private yardSyncStep(): number {
+    return this.yardRun ? Math.min(this.yardRun.steps.step + 1, 3) : 0
+  }
+
+  /** Sends a `sync` once the yard step changes, so your friend's line follows within a frame. */
+  private followYardStep(): void {
+    const step = this.yardSyncStep()
+    if (step === this.sentYardStep) return
+    this.sentYardStep = step
+    this.dispatch({ type: 'ui', action: 'yard' })
+  }
+
+  /**
+   * One step of the yard: its garden runs on real time, its sounds and cues play, and a
+   * throw over the fence vanishes with a puff in the peek strip. Nothing leaves this page.
+   */
+  private yardStep(run: YardRun, hidden: boolean): void {
+    const now = performance.now()
+    const events = run.update(now)
+    for (const event of events) {
+      if (event.type !== 'dry') this.logEvent(event.type, event)
+      if (!hidden) playEvent(event, run.garden, this.play)
+      if (event.type === 'cross')
+        this.neighbour.vanish(
+          event.crossing.x,
+          event.crossing.kind,
+          this.clock.now()
+        )
+    }
+    if (this.ghost !== run.ghost) {
+      this.ghost = run.ghost
+      if (run.ghost)
+        this.logEvent('ghost', {
+          id: run.ghost.id,
+          move: run.ghost.move,
+          stoppable: true
+        })
+    }
+    this.followStripes(!hidden)
+    if (events.length > 0) this.gardenEvents.emit(events)
+    this.loops.sync(hidden ? null : run.garden)
+    const yard = this.hud.get().yard
+    if (yard && yard.step !== run.steps.step)
+      this.hud.set({ yard: { ...yard, step: run.steps.step } })
+    if (run.over(now)) this.closeYard(false)
+  }
+
+  /** Puts the yard's line in the tip line: a failure tip for its 3s, else the step's line. */
+  private yardNote(): void {
+    const tip = this.shownTip
+    if (!tip || tip.key === this.hud.get().tip?.key) return
+    this.hud.set({ tip: { key: tip.key, text: tip.text, spot: tip.spot } })
+    this.logEvent('note', { text: tip.text, kind: 'yard', spot: tip.spot })
+  }
+
   /** The garden when its round is in play, else null, so input does nothing. */
   playableGarden(): Garden | null {
     const phase = this.phase()
     return phase?.kind === 'play' && phase.round === this.gardenRound
       ? this.garden
       : null
+  }
+
+  /**
+   * Follows your settled stripes after each step: in live play, a column that gains one
+   * chimes, and the scene hears of each gain and loss for its cues.
+   */
+  private followStripes(live: boolean): void {
+    const { gained, lost } = this.stripeWatch.step(this.garden, live)
+    if (!gained && !lost) return
+    if (gained) this.play('stripe')
+    this.logEvent('stripes', { gained, lost })
+    this.stripeEvents.emit(gained, lost)
+  }
+
+  /** Listens for columns that gain or lose a stripe in live play, as 12-bit masks. */
+  onStripes(fn: (gained: number, lost: number) => void): () => void {
+    return this.stripeEvents.add(fn)
   }
 
   /** Listens for garden events after each update, for the scene. */
@@ -442,7 +714,10 @@ export class RoomSession {
     const step = roomStep(this.state, input, now, this.env)
     const was = this.state.phase
     this.state = step.state
+    // Leaving the seated lobby closes the yard at once, before the screen changes.
+    if (this.yardRun && !this.yardAllowed()) this.closeYard(false)
     if (was !== 'over' && step.state.phase === 'over') this.sting()
+    this.saveFinished()
     for (const msg of step.out) {
       this.outbox.push(msg, now)
       if (msg.k === 'sync' && msg.copy)
@@ -452,6 +727,16 @@ export class RoomSession {
     if (step.out.some(msg => msg.k === 'leave' || msg.k === 'start'))
       this.outbox.pump(now)
     this.publish(step.effects)
+  }
+
+  /** Saves the finished-match fact once the end of a match Brenda decided shows here. */
+  private saveFinished(): void {
+    const over = this.state.over
+    if (this.muted || !over || !decidedMatchEnd(this.state)) return
+    if (this.finishedFor === over.matchId) return
+    this.finishedFor = over.matchId
+    saveFinishedMatch()
+    this.logEvent('finished', { match: over.matchId })
   }
 
   /** Advances the round's garden to the shared clock and sends what crossed the fence. Call it every frame. */
@@ -468,8 +753,18 @@ export class RoomSession {
   private step(hidden: boolean): void {
     const now = this.clock.now()
     this.followMatch(now)
+    if (this.yardRun && !this.yardAllowed()) this.closeYard(false)
+    this.followYardStep()
+    if (this.yardRun) {
+      this.yardStep(this.yardRun, hidden)
+      this.companion?.update()
+      return
+    }
+    // Only a live step on a showing page raises tips; catch-up replays events silently.
+    let live = false
     const playing = this.playableGarden()
-    if (playing) this.autopilot?.step(playing)
+    const paused = this.paused
+    if (playing && !paused) this.autopilot?.step(playing)
     if (this.gardenRound >= 0) {
       const garden = this.garden
       const target = Math.max(0, now - this.gardenOrigin)
@@ -482,8 +777,10 @@ export class RoomSession {
           gameMs: Math.round(behind),
           ms: performance.now() - started
         })
-      if (garden.t > 0) this.tip('start')
+      live = liveStep(behind, hidden || !this.state.visible)
+      if (live) this.firstLiveFrame(garden)
     }
+    const triggers = this.triggersFor()
     this.finalStep(now)
     const events = this.garden.drainEvents()
     if (playing) this.autopilot?.observe(events)
@@ -492,7 +789,9 @@ export class RoomSession {
     for (const event of events) {
       // Drying is routine; logging it would push everything else out of the dev log.
       if (event.type !== 'dry') this.logEvent(event.type, event)
-      this.noteFor(event)
+      // Catch-up still ends moments, so a tip that waited through it doesn't show stale.
+      if (live) this.noteFor(event, triggers)
+      else triggers?.ends(event)
       if (playing && !hidden) playEvent(event, this.garden, this.play)
       if (event.type === 'cross') this.sendCrossing(event.crossing, now)
       else if (event.type === 'clip') this.sendClip(event.clip, now)
@@ -507,14 +806,23 @@ export class RoomSession {
       )
         vibrate(80)
     }
+    if (live && this.ghostAgain && this.phase()?.kind === 'play') {
+      if (this.tipsOn) this.playGhost(this.ghostAgain, true)
+      this.ghostAgain = 0
+    }
+    // Lawn and time tips look at the lawn after this frame's events.
+    if (triggers && live && this.tipsOn) triggers.frame()
+    else triggers?.quiet()
+    if (!this.muted && this.gardenRound >= 0)
+      this.followStripes(live && !!playing)
     this.sendLawn(now, hidden ? FRAMELESS_LAWN_EARLY_MS : 0)
     if (!hidden) {
       this.countdownSounds(now)
       this.lastTicks(now)
     }
     if (events.length > 0) this.gardenEvents.emit(events)
-    // Loops follow the garden only during play on a showing page.
-    if (!this.muted) this.loops.sync(hidden ? null : playing)
+    // Loops follow the garden only during play on a showing page, and stop for a pause.
+    if (!this.muted) this.loops.sync(hidden || paused ? null : playing)
     this.companion?.update()
   }
 
@@ -563,7 +871,11 @@ export class RoomSession {
    * Returns false when it can't go yet.
    */
   shakeFist(): boolean {
-    if (!this.playableGarden() || Date.now() < this.hud.get().fistUntil)
+    if (
+      !this.playableGarden() ||
+      this.paused ||
+      Date.now() < this.hud.get().fistUntil
+    )
       return false
     this.hud.set({ fistUntil: Date.now() + FIST_COOLDOWN_MS })
     // Anywhere along their fence, so a run of fists doesn't stack on one spot.
@@ -668,69 +980,172 @@ export class RoomSession {
     )
   }
 
+  /** Shows a toast in the patio strip at once, for every player, for 2.6s. */
+  showToast(text: string): void {
+    this.toastUntil = Date.now() + TOAST_MS
+    this.hud.set({ toast: { key: ++this.toastKey, text, spot: 'patio' } })
+    this.logEvent('note', { text, kind: 'toast', spot: 'patio' })
+  }
+
   /**
-   * Shows a line over the patio. A toast shows at once. A tip replaces the line on show
-   * once that has had 1.5s; until then it waits, and only the newest waiting tip is kept.
+   * Moves the tip queue on and puts its tip and the toast on screen. Tip time stands still
+   * while Reconnecting shows or the page is hidden, and a patio tip waits under a toast.
    */
-  showNote(text: string, kind: Note['kind']): void {
-    const note = { id: ++this.noteId, text, kind }
-    this.logEvent('note', { text, kind })
-    if (kind === 'toast' || !this.hud.get().note) this.putNote(note)
-    else this.nextNote = note
-  }
-
-  private putNote(note: Note | null): void {
-    this.hud.set({ note })
-    this.noteShownAt = Date.now()
-  }
-
-  /** Swaps in the waiting tip, or clears the line once its time is up. */
   private noteStep(): void {
-    const note = this.hud.get().note
-    if (!note) return
-    const shownFor = Date.now() - this.noteShownAt
-    const minMs = note.kind === 'tip' ? NOTE_MIN_MS : NOTE_MS.toast
-    if (this.nextNote && shownFor >= minMs) {
-      this.putNote(this.nextNote)
-      this.nextNote = null
-    } else if (shownFor >= NOTE_MS[note.kind]) this.putNote(null)
+    const now = Date.now()
+    const hud = this.hud.get()
+    if (hud.toast && now >= this.toastUntil) this.hud.set({ toast: null })
+    if (hud.banner && now >= this.bannerUntil) this.hud.set({ banner: null })
+    if (this.yardRun) return this.yardNote()
+    const tip = this.tipQueue.step(now, {
+      all:
+        this.state.conn === 'reconnecting' ||
+        !this.state.visible ||
+        this.paused,
+      patio: this.hud.get().toast !== null
+    })
+    // An urgent tip in the patio strip ends the toast there early.
+    if (tip?.spot === 'patio' && tip.urgent && this.hud.get().toast)
+      this.hud.set({ toast: null })
+    if ((tip?.key ?? 0) === (hud.tip?.key ?? 0)) return
+    this.hud.set({
+      tip: tip && { key: tip.key, text: tip.text, spot: tip.spot }
+    })
+    if (tip)
+      this.logEvent('note', { text: tip.text, kind: 'tip', spot: tip.spot })
   }
 
-  /** Tips show the first time each thing happens in round 1; toasts show every time. */
-  private noteFor(event: GardenEvent): void {
-    if (event.type === 'canEmpty')
-      return this.showNote(TOASTS.canEmpty, 'toast')
-    if (event.type === 'noMower') return this.showNote(TOASTS.noMower, 'toast')
-    if (event.type === 'mowerPoke')
-      return this.showNote(TOASTS.mowerPoke, 'toast')
-    const tip = tipFor(event)
-    if (tip) this.tip(tip)
+  /** Tips show the first time each thing happens; toasts show every time. */
+  private noteFor(event: GardenEvent, triggers: TipTriggers | null): void {
+    if (event.type === 'canEmpty') return this.showToast(TOASTS.canEmpty)
+    if (event.type === 'noMower') return this.showToast(TOASTS.noMower)
+    if (event.type === 'mowerPoke') return this.showToast(TOASTS.mowerPoke)
+    triggers?.event(event)
+  }
+
+  /**
+   * The tip triggers for the round garden on show, made fresh with each garden, or null
+   * outside a round's countdown and play, and for Mr Pemberton's muted session.
+   */
+  private triggersFor(): TipTriggers | null {
+    if (this.gardenRound < 0 || this.muted) return null
+    if (this.triggers?.garden !== this.garden)
+      this.triggers = new TipTriggers(this.garden, this.tipSink)
+    return this.triggers
+  }
+
+  /** Whether this page shows tips now: a new player's match, or after Show Tips. */
+  get tipsOn(): boolean {
+    const choice = this.hud.get().tips
+    return (
+      !this.muted && (choice === 'on' || (choice === 'auto' && this.firstMatch))
+    )
+  }
+
+  /** True once tip `id` has shown for 3s in this match. */
+  tipSeen(id: TipId): boolean {
+    const kind = tipKind(id)
+    return this.tipQueue.hasSeen(id, kind.failure || kind.eachRound)
+  }
+
+  /** Show Tips: a new player's tips from now until the page reloads. */
+  showTips(): void {
+    this.hud.set({ tips: 'on' })
   }
 
   /** Hide Tips: clears the tip on show and shows no more until the page reloads. */
   hideTips(): void {
-    this.tipsHidden = true
-    this.nextNote = null
-    if (this.hud.get().note?.kind === 'tip') this.putNote(null)
+    this.hud.set({ tips: 'off', tip: null, banner: null })
+    this.tipQueue.clear()
+    this.ghost = null
+    this.ghostAgain = 0
   }
 
-  private tip(id: TipId): void {
-    // Catch-up after play stops replays events, but tips belong to play.
-    // Online, tips show in round 1 of each match; Practice shows them in every round.
-    if (
-      this.tipsHidden ||
-      this.muted ||
-      (this.gardenRound !== 0 && !this.options.practice) ||
-      this.phase()?.kind !== 'play'
-    )
-      return
-    if (this.tipsMatch !== this.gardenMatch) {
-      this.tipsMatch = this.gardenMatch
-      this.tipsShown.clear()
+  /** Where the triggers' tips go: the queue, for a new player during the countdown or play. */
+  private readonly tipSink = {
+    raise: (req: TipRequest): void => {
+      const kind = this.phase()?.kind
+      if (!this.tipsOn || (kind !== 'play' && kind !== 'countdown')) return
+      // The spot is fixed when the tip shows: the patio strip if the line would hide its object.
+      this.tipQueue.raise({
+        ...req,
+        spot: req.spot ?? (() => tipSpotFor(this.garden, req.target))
+      })
+    },
+    end: (moment: string, watched: boolean): void =>
+      this.tipQueue.end(moment, watched),
+    shedBanner: (): void => {
+      if (!this.tipsOn) return
+      this.bannerUntil = Date.now() + SHED_BANNER_MS
+      this.hud.set({ banner: { key: ++this.toastKey, ...shedBanner } })
+      this.logEvent('banner', { text: shedBanner.text })
     }
-    if (this.tipsShown.has(id)) return
-    this.tipsShown.add(id)
-    this.showNote(TIPS[id], 'tip')
+  }
+
+  /** The tip on show, with what its arrow points at, or null. */
+  get shownTip(): ShownTip | null {
+    const run = this.yardRun
+    if (!run) return this.tipQueue.shown
+    const line = run.shown(performance.now())
+    if (this.yardTip?.key !== line.key)
+      this.yardTip = {
+        key: line.key,
+        id: 'yard',
+        text: line.text,
+        spot: tipSpotFor(run.garden, line.target ?? undefined),
+        urgent: false,
+        target: line.target
+      }
+    return this.yardTip
+  }
+
+  /**
+   * The first live frame of a round decides whether its countdown tips may show: only
+   * when it lands in the countdown or the first 2s of play, so a reload never replays them.
+   */
+  private firstLiveFrame(garden: Garden): void {
+    const key = `${this.gardenMatch}:${this.gardenRound}`
+    if (this.liveFor === key) return
+    this.liveFor = key
+    this.freshStart = freshRound(this.phase()?.kind ?? '', garden.t)
+    this.logEvent('liveFrame', {
+      round: this.gardenRound,
+      fresh: this.freshStart
+    })
+    if (!this.freshStart) return
+    this.triggersFor()?.countdown(this.coachTip(this.gardenRound))
+    if (this.gardenRound !== 0 || !this.tipsOn) return
+    // The finger plays in the countdown, and once more at 0s, which a press stops.
+    const gnome = nearestGnome(garden)
+    if (!gnome) return
+    const counting = this.phase()?.kind === 'countdown'
+    this.playGhost(gnome, !counting)
+    this.ghostAgain = counting ? gnome : 0
+  }
+
+  /**
+   * The coach tip for round `round`'s countdown: what cost you most last round, read from
+   * that round's verdict, so a reloaded page picks the same words. Null in round 1, or
+   * when the verdict hasn't arrived.
+   */
+  private coachTip(round: number): string | null {
+    const last = this.state.results.find(r => r.round === round - 1)
+    if (!last) return null
+    const me = hostSide(this.state) ? 0 : 1
+    return coachLine(last.scores[me], last.counts[me])
+  }
+
+  private playGhost(id: number, stoppable: boolean): void {
+    this.ghost = { id, startAt: performance.now(), stoppable }
+    this.logEvent('ghost', { id, stoppable })
+  }
+
+  /** A press on the garden stops the ghost finger's second play. */
+  stopGhost(): void {
+    if (this.yardRun?.ghost) this.yardRun.ghost = null
+    if (!this.ghost?.stoppable) return
+    this.ghost = null
+    this.logEvent('ghostStop')
   }
 
   /** Records an event for the dev `events()` hook. */
@@ -746,8 +1161,31 @@ export class RoomSession {
       fast: netFlags.fast,
       peerLawn: round => this.peerLawn(round),
       peerFinal: round => this.rebuiltPeerFinal(round),
-      myFinal: round => this.myFinal(round)
+      myFinal: round => this.myFinal(round),
+      newPlayer: () => this.newPlayerNow(),
+      yardStep: () => this.yardSyncStep()
     }
+  }
+
+  /**
+   * Whether this page counts as a new player right now: the dev `?first` override, else
+   * the stored fact. Mr Pemberton's muted session never does.
+   */
+  newPlayerNow(): boolean {
+    return !this.muted && isNewPlayer(netFlags.first)
+  }
+
+  /**
+   * Whether this page teaches the current match as a new player's first. It's read once,
+   * when the page first sees the match, so teaching never switches off mid-match.
+   */
+  get firstMatch(): boolean {
+    const id = this.state.match?.id ?? ''
+    if (id !== this.firstFor) {
+      this.firstFor = id
+      this.first = id !== '' && this.newPlayerNow()
+    }
+    return this.first
   }
 
   private currentRound(): number {
@@ -886,7 +1324,7 @@ export class RoomSession {
         k: 'pong',
         id: payload.id,
         t0: payload.t0,
-        th: this.clock.now()
+        th: this.clock.shared()
       })
       return
     }
@@ -1034,9 +1472,10 @@ export class RoomSession {
     const pack = encodeFinal(finalReport(garden))
     this.keepFinal(this.gardenMatch, this.gardenRound, pack)
     this.logEvent('final', { round: this.gardenRound, bytes: pack.length })
-    // Play is over: the tip line clears for Brenda.
-    this.nextNote = null
-    this.putNote(null)
+    // Play is over: the tip line clears for Brenda, and waiting tips leave unseen.
+    this.tipQueue.clear()
+    this.hud.set({ tip: null, toast: null, banner: null })
+    this.ghost = null
     this.dispatch({ type: 'final', round: this.gardenRound, pack })
   }
 
@@ -1095,6 +1534,9 @@ export class RoomSession {
     if (this.gardenRound >= 0 && this.gardenMatch === match.id) this.sendFinal()
     this.gardenRound = phase.round
     this.gardenMatch = match.id
+    this.resetTips(match.id)
+    this.ghost = null
+    this.ghostAgain = 0
     this.neighbour.clear()
     this.neighbour.headSeed = seedOf(this.state.peer?.id ?? '')
     this.landings.length = 0
@@ -1107,6 +1549,18 @@ export class RoomSession {
     this.gardenOptions = options
     this.garden = this.roundGarden(options, match.id, phase.round, now)
     this.logEvent('round', { round: phase.round })
+  }
+
+  /**
+   * A new match lets every tip show again, except those a finished yard step taught; a new
+   * round lets failure tips show once more.
+   */
+  private resetTips(matchId: string): void {
+    if (this.tipsFor !== matchId) {
+      this.tipQueue.newMatch()
+      for (const id of this.yardLearned) this.tipQueue.learn(id)
+    } else this.tipQueue.newRound()
+    this.tipsFor = matchId
   }
 
   private roundOptions(match: MatchInfo, round: number): GardenOptions {
@@ -1172,10 +1626,12 @@ export class RoomSession {
   }
 
   private previewGarden(): Garden {
-    return new Garden({
-      seed: Math.floor(hash01(seedOf(this.code), 1) * 0x7fffffff),
-      endMs: 0
-    })
+    return new Garden({ seed: this.previewSeed(), endMs: 0 })
+  }
+
+  /** The lobby lawn's seed, from the room code, which the yard's lawn shares. */
+  private previewSeed(): number {
+    return Math.floor(hash01(seedOf(this.code), 1) * 0x7fffffff)
   }
 
   private runEffect(effect: RoomEffect): void {
@@ -1239,6 +1695,8 @@ export class RoomSession {
     let announce = prev.announce
     for (const effect of effects)
       if (effect.type === 'announce') announce = effect.text
+      // A new match starts the live region empty, so a rematch never repeats the last result.
+      else if (effect.type === 'matchStarted') announce = ''
     const next = this.toView(announce)
     // Keep the old objects when nothing in them changed, so React skips the render.
     if (shallowEqual(prev.peer, next.peer)) next.peer = prev.peer
@@ -1263,7 +1721,9 @@ export class RoomSession {
             rematch: s.peer.rematch,
             listed: s.peer.listed,
             unlistedSince: s.peer.unlistedSince,
-            away: s.peer.away
+            away: s.peer.away,
+            first: s.peer.first,
+            yard: peerYard(s)
           }
         : null,
       myReady: s.myReady,
@@ -1275,7 +1735,9 @@ export class RoomSession {
       results: s.results,
       tally: tallyOf(s),
       announce,
-      practice: this.options.practice === true
+      practice: this.options.practice === true,
+      newPlayer: this.newPlayerNow(),
+      firstMatch: this.firstMatch
     }
   }
 }

@@ -17,20 +17,35 @@ describe('the sound map', () => {
   it('gives each garden event its sound', () => {
     const cases: [GardenEvent, SfxName[]][] = [
       [{ type: 'throw', id: 1, speedPx: 1200, distance: 400 }, ['whoosh']],
-      [{ type: 'clip', clip: { kind: 'gnome', x: 300, at: 0 } }, ['creak']],
+      [
+        { type: 'clip', id: 1, clip: { kind: 'gnome', x: 300, at: 0 } },
+        ['creak']
+      ],
       [{ type: 'catch', id: 1 }, ['pop']],
-      [{ type: 'yank', id: 1 }, ['pop']],
+      [{ type: 'yank', id: 1, lx: 100, ly: 200 }, ['pop']],
+      // A new weed's dirt puff makes no sound.
+      [
+        { type: 'sprout', id: 2, patch: 30, spread: true, lx: 300, ly: 100 },
+        []
+      ],
       [{ type: 'shell', id: 1 }, ['squish']],
       [{ type: 'scalp', patch: 3 }, ['rattle']],
       [{ type: 'canEmpty' }, ['drip']],
       [{ type: 'flood', patches: [1, 2] }, ['splash']],
+      [{ type: 'drown', patch: 4 }, ['squish']],
       [{ type: 'sparkle', patch: 5 }, ['ding']],
       [{ type: 'bark', id: 1 }, ['bark']],
       [{ type: 'dig', patch: 9 }, ['stomp']],
       [{ type: 'vane', kind: 'over', dir: 1 }, ['creak']],
       [{ type: 'shed' }, ['slam']],
       [
-        { type: 'sink', kind: 'trampoline', patch: 40, fromNeighbour: true },
+        {
+          type: 'sink',
+          id: 1,
+          kind: 'trampoline',
+          patch: 40,
+          fromNeighbour: true
+        },
         ['slam', 'rattle', 'boing']
       ],
       [{ type: 'dry', patch: 1, health: 4 }, []]
@@ -46,6 +61,7 @@ describe('the sound map', () => {
       soundsOf(
         {
           type: 'land',
+          id: 1,
           landing: { patch, kind, at: 0 },
           fromNeighbour: true
         },

@@ -85,8 +85,41 @@ describe('Garden', () => {
   it('needs a 60-unit pull before a weed comes out', () => {
     const garden = gardenWithWeed(7)
     expect(yank(garden, 50)).toBeNull()
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     expect(yank(garden, 70)).not.toBeNull()
+    expect(garden.weeds).toHaveLength(0)
+  })
+
+  it('reports pull progress by distance in any direction, and yanks at 60 units', () => {
+    const garden = gardenWithWeed(7)
+    const weed = { ...firstWeed(garden) }
+    expect(garden.pullProgress()).toBe(-1)
+    garden.command({
+      type: 'grab',
+      target: { type: 'weed', id: weed.id, distance: 0 },
+      lx: weed.lx,
+      ly: weed.ly
+    })
+    garden.advanceTo(garden.t + TICK_MS)
+    expect(garden.pullProgress()).toBe(0)
+    const pullTo = (dx: number, dy: number) => {
+      garden.command({ type: 'hold', lx: weed.lx + dx, ly: weed.ly + dy })
+      garden.advanceTo(garden.t + TICK_MS)
+      return garden.pullProgress()
+    }
+    expect(pullTo(30, 0)).toBeCloseTo(0.5)
+    expect(pullTo(0, 30)).toBeCloseTo(0.5)
+    expect(pullTo(-18, -24)).toBeCloseTo(0.5)
+    expect(pullTo(0, -59)).toBeCloseTo(59 / 60)
+    expect(garden.drainEvents().some(e => e.type === 'yank')).toBe(false)
+    // At the full pull the weed comes out, and there's nothing left to pull.
+    expect(pullTo(-60, 0)).toBe(-1)
+    expect(garden.drainEvents().filter(e => e.type === 'yank')).toEqual([
+      expect.objectContaining({ lx: weed.lx, ly: weed.ly })
+    ])
     expect(garden.weeds).toHaveLength(0)
   })
 
@@ -199,9 +232,80 @@ describe('Garden', () => {
     const events = garden.drainEvents()
     expect(events.filter(e => e.type === 'throw')).toHaveLength(1)
     expect(events.find(e => e.type === 'tired')).toMatchObject({
-      reason: 'hand'
+      reason: 'hand',
+      lx: b?.lx,
+      ly: b?.ly
     })
     expect(garden.item(b?.id ?? -1)?.state).toBe('rest')
+  })
+
+  it('shakes a weed left rooted by a short flick, but not after a full yank', () => {
+    const flick = gardenWithWeed(7)
+    const weed = { ...firstWeed(flick) }
+    expect(yank(flick, 40)).toBeNull()
+    flick.command({
+      type: 'release',
+      release: { type: 'throw', speedPx: 1800, dirX: 0, dirY: -1 }
+    })
+    flick.advanceTo(flick.t + TICK_MS)
+    const rooted = flick.drainEvents().filter(e => e.type === 'rooted')
+    expect(rooted).toEqual([
+      { type: 'rooted', id: weed.id, lx: weed.lx, ly: weed.ly }
+    ])
+    expect(flick.weeds).toHaveLength(1)
+
+    const pulled = gardenWithWeed(7)
+    expect(yank(pulled, 70)).not.toBeNull()
+    pulled.command({
+      type: 'release',
+      release: { type: 'throw', speedPx: 1800, dirX: 0, dirY: -1 }
+    })
+    pulled.advanceTo(pulled.t + TICK_MS)
+    expect(pulled.drainEvents().some(e => e.type === 'rooted')).toBe(false)
+
+    // A press the browser cancelled isn't a flick.
+    const cut = gardenWithWeed(7)
+    yank(cut, 10)
+    cut.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'cancel' }
+    })
+    cut.advanceTo(cut.t + TICK_MS)
+    expect(cut.drainEvents().some(e => e.type === 'rooted')).toBe(false)
+  })
+
+  it('reports a fast flick that grabs nothing, and grabs what lies in reach', () => {
+    const garden = new Garden({ seed: 5 })
+    garden.items.length = 0
+    garden.command({ type: 'spawn', kind: 'gnome', lx: 300, ly: 300 })
+    garden.advanceTo(TICK_MS)
+    garden.drainEvents()
+    const gnome = garden.items[0]
+    if (!gnome) throw new Error('no gnome')
+    const snap = (lx: number, ly: number, toX: number, toY: number) => {
+      garden.command({ type: 'snap', lx, ly, toX, toY, reach: 40, near: 80 })
+      garden.advanceTo(garden.t + TICK_MS)
+      return garden.drainEvents().find(e => e.type === 'miss') ?? null
+    }
+    const grassY = gnome.ly - ITEM_LIFT.gnome
+    // Bare grass far from the gnome, flicked at the fence: a miss with nothing near.
+    expect(snap(100, 500, 100, 440)).toMatchObject({
+      type: 'miss',
+      lx: 100,
+      ly: 500,
+      dirX: 0,
+      dirY: -1,
+      near: null
+    })
+    // 60 units from the gnome, aimed at the fence: a miss that names it.
+    expect(snap(360, grassY, 360, grassY - 50)).toMatchObject({
+      near: { type: 'item', id: gnome.id }
+    })
+    // The same spot, rubbed sideways: too fast to mow, with nothing named.
+    expect(snap(360, grassY, 420, grassY)).toMatchObject({ near: null })
+    // 30 units away: the snap grabs it, and nothing missed.
+    expect(snap(330, grassY, 330, grassY - 40)).toBeNull()
+    expect(garden.held?.id).toBe(gnome.id)
   })
 
   it('throws shorter with a tired arm', () => {

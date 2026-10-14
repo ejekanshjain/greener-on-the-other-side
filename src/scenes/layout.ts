@@ -10,6 +10,8 @@ export const PEEK = { y: 96, h: 100 } as const
 export const FENCE = { y: 196, h: 40 } as const
 export const LAWN = { x: 40, y: 236, w: LAWN_W, h: LAWN_D } as const
 export const PATIO = { y: 236 + LAWN_D, h: PATIO_D } as const
+/** The yard's panel covers the patio from here down, leaving the stripe ticks on its edge. */
+export const YARD_PANEL_Y = PATIO.y + 32
 
 /** The peek strip's rows from the horizon down: their rows 3, 2, 1 and 0, squashed with distance. */
 export const PEEK_ROWS: readonly { row: number; y: number; h: number }[] = [

@@ -4,6 +4,7 @@ import { flightPoint } from '../game/flight'
 import { gustDir, gustNear } from '../game/wind'
 import { isHeavy } from '../game/types'
 import type { Garden } from '../game/garden'
+import type { TipTarget } from '../game/tipQueue'
 import { ITEM_LIFT, ITEM_RADIUS } from '../game/items'
 import {
   BAG_CUTS,
@@ -33,6 +34,8 @@ import {
   type Item,
   type ItemKind
 } from '../game/types'
+import { FailureCues } from './cues'
+import { StripeCues, StripeTicks } from './stripeCues'
 import { Effects } from './fx'
 import { paintShedOpen, SHED_OPEN_RECT } from './junkArt'
 import {
@@ -46,6 +49,7 @@ import type { Viewport } from '../shared/canvas'
 import { CachedLayer } from '../shared/layer'
 import { damp, hash01 } from '../shared/math'
 import { palette } from '../shared/palette'
+import { settings } from '../shared/settings'
 import { sketchRoundRect, sketchText } from '../shared/sketch'
 import {
   CAN_WINDOW,
@@ -68,14 +72,25 @@ import {
   paintCaption,
   paintHead,
   paintMowerBare,
+  paintPatioPaving,
   paintScenery,
   STAMP_RECT,
   TAP_SPOUT,
   type StampKey
 } from './art'
 import type { PressView } from './input'
+import { drawGhostFinger, type FingerPlay } from './ghostFinger'
+import { drawTipPointer } from './tipPointer'
 import { LawnLayer } from './lawnLayer'
-import { DESIGN_H, DESIGN_W, designX, designY, LAWN } from './layout'
+import {
+  DESIGN_H,
+  DESIGN_W,
+  designX,
+  designY,
+  LAWN,
+  PATIO,
+  YARD_PANEL_Y
+} from './layout'
 import {
   CAPTIONS,
   drawPeekLive,
@@ -87,6 +102,10 @@ import {
   PEEK_ROWS_RECT,
   peekKey
 } from './peekStrip'
+
+/** How far a weed you pull leans at the full pull, in radians, and slides toward you. */
+const PULL_LEAN = 0.45
+const PULL_SHIFT = 7
 
 /** A thrown item the thrower still draws rising out of view after the hand-off. */
 interface Ghost {
@@ -112,6 +131,8 @@ export interface SceneInfo {
 export class GardenScene {
   private backdrop: CachedLayer | null = null
   private readonly scenery: CachedLayer
+  /** The bare patio strip above the yard's panel, hiding the props' tops while it's open. */
+  private readonly yardStrip: CachedLayer
   private readonly peekBack: CachedLayer
   private readonly peek: CachedLayer
   private readonly peekFront: CachedLayer
@@ -144,11 +165,22 @@ export class GardenScene {
   private info: SceneInfo = { round: -1, debug: false }
   /** Dust puffs and the screen shake. */
   readonly fx = new Effects()
+  /** A blocked throw's words, a rooted weed's shake and a missed flick's swish. */
+  readonly cues = new FailureCues()
+  /** A stripe's sweep, its flicker as it goes, and the blocked-stripe flash. */
+  readonly stripeCues = new StripeCues()
+  /** The chalk ticks and crosses on the patio's edge, under each column. */
+  readonly ticks = new StripeTicks()
+  private ticksGarden: Garden | null = null
   /** The neighbour's lawn version and look the peek layer last painted. */
   private peekVersion = -1
   private peekLook = ''
   private readonly stopResize: () => void
   private time = 0
+  /** What a new player's tip on show points at, set by the room each frame. */
+  pointer: TipTarget | null = null
+  /** A new player's ghost finger on show, set by the room each frame. */
+  ghost: FingerPlay | null = null
   /** The neighbour's head, cached per look; rebuilt when the head seed changes. */
   private fistStamp: CachedLayer | null = null
   private head: { seed: number; calm: CachedLayer; angry: CachedLayer } | null =
@@ -187,6 +219,12 @@ export class GardenScene {
       { ...PEEK_FRONT_RECT }
     )
     this.lawn = new LawnLayer(viewport)
+    this.yardStrip = new CachedLayer(viewport, paintPatioPaving, {
+      x: 0,
+      y: PATIO.y,
+      width: DESIGN_W,
+      height: YARD_PANEL_Y - PATIO.y
+    })
     this.shedOpen = new CachedLayer(viewport, paintShedOpen, {
       ...SHED_OPEN_RECT
     })
@@ -234,6 +272,8 @@ export class GardenScene {
   /** Follows garden events that need drawing, such as items leaving over the fence. */
   onEvents(events: readonly GardenEvent[]): void {
     this.fx.onEvents(events, this.time)
+    this.cues.onEvents(events, this.time)
+    this.stripeCues.onEvents(events, this.time)
     for (const event of events) {
       if (event.type === 'cross')
         this.ghosts.push({
@@ -246,6 +286,17 @@ export class GardenScene {
       else if (event.type === 'sit') this.sitAt = this.time
       else if (event.type === 'dig') this.digAt = this.time
     }
+  }
+
+  /** Columns of your lawn that gained or lost a stripe in live play, as 12-bit masks. */
+  stripeChange(gained: number, lost: number): void {
+    this.ticks.lose(lost, this.time)
+    this.stripeCues.change(
+      gained,
+      lost,
+      this.time,
+      settings.get().reducedMotion
+    )
   }
 
   /**
@@ -280,20 +331,44 @@ export class GardenScene {
     // Their head and their clips falling back sit behind the fence, so draw them first.
     if (garden) this.drawBehindFence(ctx, now)
     this.scenery.draw(ctx)
+    if (garden?.yardLawn) this.yardStrip.draw(ctx)
     if (garden?.shedOpen) this.shedOpen.draw(ctx)
     this.lawn.draw(ctx, garden)
+    const still = settings.get().reducedMotion
     if (garden) {
+      this.stripeCues.draw(ctx, this.time, still)
       this.drawSparkles(ctx, garden)
       this.drawGarden(ctx, garden)
       this.fx.draw(ctx, this.time)
       this.drawMower(ctx, garden, dt)
       this.drawTapAndCan(ctx, garden, press)
+      // A new round's garden starts the ticks fresh.
+      if (garden !== this.ticksGarden) {
+        this.ticks.reset()
+        this.ticksGarden = garden
+      }
+      this.ticks.follow(garden.settledStripes())
+      this.ticks.draw(ctx, this.time, still)
       this.drawWind(ctx, garden)
       this.drawOverFence(ctx, now)
       this.drawSaid(ctx, now)
     }
-    this.drawVane(ctx, garden, dt)
+    this.drawVane(ctx, garden, dt, still)
     this.drawGhosts(ctx, garden)
+    // While the ghost finger plays, it's the pointer.
+    const ghosting =
+      garden !== null &&
+      this.ghost !== null &&
+      drawGhostFinger(
+        ctx,
+        garden,
+        this.ghost,
+        performance.now(),
+        still,
+        this.stampOf
+      )
+    if (garden && this.pointer && !ghosting)
+      drawTipPointer(ctx, garden, this.pointer, this.time, still)
     if (garden && this.info.debug) this.drawDebug(ctx, garden)
   }
 
@@ -304,6 +379,7 @@ export class GardenScene {
     this.backdrop?.dispose()
     this.scenery.dispose()
     this.shedOpen.dispose()
+    this.yardStrip.dispose()
     this.peekBack.dispose()
     this.peek.dispose()
     this.peekFront.dispose()
@@ -326,6 +402,9 @@ export class GardenScene {
     return this.stamps.size
   }
 
+  /** The stamp for an item kind, made once, for the ghost finger. */
+  private readonly stampOf = (kind: ItemKind): CachedLayer => this.stamp(kind)
+
   private stamp(kind: StampKey): CachedLayer {
     let stamp = this.stamps.get(kind)
     if (!stamp) {
@@ -340,17 +419,23 @@ export class GardenScene {
   }
 
   private drawGarden(ctx: CanvasRenderingContext2D, garden: Garden): void {
+    const still = settings.get().reducedMotion
+    const pull = garden.pullProgress()
+    const held = garden.held
     for (const weed of garden.weeds) {
-      const lean =
-        garden.held?.target === 'weed' && garden.held.id === weed.id
-          ? Math.sin(this.time / 40) * 0.15
-          : 0
-      this.stamp(weed.kind).stamp(
-        ctx,
-        designX(weed.lx),
-        designY(weed.ly, ITEM_LIFT[weed.kind]),
-        lean
-      )
+      let x = designX(weed.lx)
+      let y = designY(weed.ly, ITEM_LIFT[weed.kind])
+      let lean = this.cues.weedLean(weed.id, this.time, still)
+      // A weed you pull leans toward your finger as the pull builds.
+      if (pull > 0 && held?.id === weed.id && !still) {
+        const dx = held.fingerX - held.pressX
+        const dy = held.fingerY - held.pressY
+        const d = Math.hypot(dx, dy)
+        lean += (dx / d) * pull * PULL_LEAN
+        x += (dx / d) * pull * PULL_SHIFT
+        y += (dy / d) * pull * PULL_SHIFT
+      }
+      this.stamp(weed.kind).stamp(ctx, x, y, lean)
     }
     // Dandelion seeds waiting to root.
     for (const seed of garden.seeds)
@@ -389,7 +474,8 @@ export class GardenScene {
     }
     const dog = garden.biscuit
     this.drawDogMarks(ctx, garden)
-    let dogDrawn = false
+    // Biscuit sleeps under the yard's panel, so his Zs stay out of its patio strip.
+    let dogDrawn = garden.yardLawn
     for (const item of sorted) {
       // Biscuit takes his place in the depth order, behind what lies nearer you.
       if (!dogDrawn && item.ly > dog.y) {
@@ -417,6 +503,7 @@ export class GardenScene {
     }
     if (!dogDrawn) this.drawBiscuit(ctx, dog)
     this.drawArmRing(ctx, garden)
+    this.cues.draw(ctx, garden, this.time)
   }
 
   /** Sunk heavy junk lying flat; a thrown mower still on its run shakes and sparks. */
@@ -605,12 +692,14 @@ export class GardenScene {
   /**
    * The weathervane on the fence top. Its arrow points where the wind will blow: up over
    * the fence for a tailwind, down at you for a headwind, or along the fence. It swings
-   * on a spring 2s before each gust and shudders while the gust blows.
+   * on a spring 2s before each gust and shudders while the gust blows. Under Reduced
+   * Motion it still turns to point, with no idle wobble and no shudder.
    */
   private drawVane(
     ctx: CanvasRenderingContext2D,
     garden: Garden | null,
-    dt: number
+    dt: number,
+    still: boolean
   ): void {
     const gust = garden ? gustNear(garden.gusts, garden.t) : null
     let target = this.vaneAngle
@@ -630,11 +719,12 @@ export class GardenScene {
     this.vaneSpin += (diff * 60 - this.vaneSpin * 7) * dt
     this.vaneAngle += this.vaneSpin * dt
     const blowing = gust && garden && garden.t >= gust.at
-    const angle =
-      this.vaneAngle +
-      (blowing
-        ? Math.sin(this.time / 35) * 0.12
-        : Math.sin(this.time / 900) * 0.05)
+    const angle = still
+      ? this.vaneAngle
+      : this.vaneAngle +
+        (blowing
+          ? Math.sin(this.time / 35) * 0.12
+          : Math.sin(this.time / 900) * 0.05)
     const x = DESIGN_W / 2
     const y = VANE_Y
     ctx.lineCap = 'round'
@@ -748,6 +838,9 @@ export class GardenScene {
    */
   private drawArmRing(ctx: CanvasRenderingContext2D, garden: Garden): void {
     const held = garden.held
+    // A rooted weed can't fly yet, so its pull ring takes the arm ring's place.
+    this.cues.notePull(held?.target === 'weed' ? held.id : 0)
+    if (held?.target === 'weed') return this.drawPullRing(ctx, garden, held.id)
     if (!held || held.grip === 'drag') return
     let x: number
     let y: number
@@ -791,6 +884,37 @@ export class GardenScene {
         -Math.PI / 2,
         -Math.PI / 2 + Math.PI * 2 * (locked ? 1 : level)
       )
+      ctx.stroke()
+    }
+    ctx.lineCap = 'butt'
+  }
+
+  /**
+   * While you drag a rooted weed, a marker-yellow ring round its root fills with your
+   * finger's distance from the press, full at the 60-unit pull that pops it out.
+   */
+  private drawPullRing(
+    ctx: CanvasRenderingContext2D,
+    garden: Garden,
+    id: number
+  ): void {
+    const weed = garden.weeds.find(w => w.id === id)
+    if (!weed) return
+    const x = designX(weed.lx)
+    const y = designY(weed.ly, ITEM_LIFT[weed.kind])
+    const r = ITEM_RADIUS[weed.kind] + 10
+    const f = Math.max(0, garden.pullProgress())
+    ctx.lineCap = 'round'
+    ctx.lineWidth = 7
+    ctx.strokeStyle = 'rgba(34, 34, 34, 0.4)'
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.stroke()
+    if (f > 0) {
+      ctx.lineWidth = 6
+      ctx.strokeStyle = palette.yellow
+      ctx.beginPath()
+      ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f)
       ctx.stroke()
     }
     ctx.lineCap = 'butt'
@@ -967,21 +1091,15 @@ export class GardenScene {
     ctx.lineCap = 'butt'
   }
 
-  /** The tap's handle and stream, and the can: home under the tap, or in your hand. */
-  private drawTapAndCan(
-    ctx: CanvasRenderingContext2D,
-    garden: Garden,
-    press: PressView | undefined
-  ): void {
-    const water = garden.water
-    const level = water.can / CAN_MS
+  /** The tap's handle: across when off, upright while it runs. */
+  private drawTapHandle(ctx: CanvasRenderingContext2D, on: boolean): void {
     const hx = designX(TAP_POS.lx) + 4
     const hy = designY(TAP_POS.ly) - 9
     ctx.strokeStyle = palette.ink
     ctx.lineWidth = 4
     ctx.lineCap = 'round'
     ctx.beginPath()
-    if (water.tapOn) {
+    if (on) {
       ctx.moveTo(hx, hy - 9)
       ctx.lineTo(hx, hy + 3)
     } else {
@@ -990,6 +1108,18 @@ export class GardenScene {
     }
     ctx.stroke()
     ctx.lineCap = 'butt'
+  }
+
+  /** The tap's handle and stream, and the can: home under the tap, or in your hand. */
+  private drawTapAndCan(
+    ctx: CanvasRenderingContext2D,
+    garden: Garden,
+    press: PressView | undefined
+  ): void {
+    const water = garden.water
+    const level = water.can / CAN_MS
+    // The tap's handle sits in the patio strip the yard keeps bare.
+    if (!garden.yardLawn) this.drawTapHandle(ctx, water.tapOn)
     const inHand = press?.job === 'wait' || press?.job === 'water'
     const homeX = designX(CAN_POS.lx)
     const homeY = designY(CAN_POS.ly)
@@ -1003,6 +1133,7 @@ export class GardenScene {
       )
     if (!inHand || !press) {
       this.drawCan(ctx, homeX, homeY, 0, level)
+      if (water.tapOn && water.can >= CAN_MS) this.drawSpill(ctx, homeX, homeY)
       return
     }
     // The can tips during the 150 ms wait, so you see that watering is coming.
@@ -1038,6 +1169,33 @@ export class GardenScene {
       ctx.arc(rx, ry + 6 + ((this.time / 4) % 100) / 10, 2.5, 0, Math.PI * 2)
       ctx.fill()
     }
+  }
+
+  /**
+   * Water running over the rim of a full can at home while the tap still runs: drops
+   * down both sides into a spreading puddle, or still drops under Reduced Motion.
+   */
+  private drawSpill(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const still = settings.get().reducedMotion
+    ctx.fillStyle = 'rgba(116, 192, 252, 0.45)'
+    ctx.beginPath()
+    ctx.ellipse(x, y + 18, 34, 7, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = palette.water
+    ctx.strokeStyle = palette.blue
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < 3; k++) {
+        const f = still ? k / 3 : (this.time / 520 + k / 3) % 1
+        const dx = side * (20 + f * 6)
+        const dy = -13 + f * 30
+        ctx.moveTo(x + dx + 3, y + dy)
+        ctx.ellipse(x + dx, y + dy, 3, 4, 0, 0, Math.PI * 2)
+      }
+    }
+    ctx.fill()
+    ctx.stroke()
   }
 
   private drawCan(
@@ -1109,14 +1267,23 @@ export class GardenScene {
       return
     }
     this.stamp('mower').stamp(ctx, x, y)
+    const full = mower.bag >= BAG_CUTS
     const fill = Math.min(1, mower.bag / BAG_CUTS) * (MOWER_BAG.h - 4)
-    ctx.fillStyle = mower.bag >= BAG_CUTS ? '#5f8a2a' : '#8fb84a'
+    ctx.fillStyle = full ? '#5f8a2a' : '#8fb84a'
     ctx.fillRect(
       x + MOWER_BAG.x + 3,
       y + MOWER_BAG.y + MOWER_BAG.h - 2 - fill,
       MOWER_BAG.w - 6,
       fill
     )
+    if (full)
+      sketchText(ctx, 'Full', x, y + MOWER_BAG.y + MOWER_BAG.h / 2, {
+        font: 'marker',
+        size: 22,
+        color: '#ffffff',
+        outline: palette.red,
+        rotate: -0.12
+      })
     if (shaking) this.drawSparks(ctx, x, y)
   }
 

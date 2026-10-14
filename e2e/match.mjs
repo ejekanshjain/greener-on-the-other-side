@@ -9,10 +9,14 @@
 // Stay keeping the match, Leave sending the host to the stormed-off screen and Back to
 // Lobby. Back from a lobby reached from the home page leaves the room at once.
 //
-// Usage: node e2e/match.mjs [clock|end] (both by default)
+// M38: every countdown's clock shows the coming round's full time, and a rematch's
+// countdown leaves nothing from the last match in the live region or the verdict text.
+//
+// Usage: node e2e/match.mjs [clock|end|countdowns] (all by default)
 import {
   BASE,
   dev,
+  frames,
   launch,
   noticeText,
   roomCode,
@@ -158,6 +162,48 @@ async function jumpToEnd(a, b, round) {
   throw new Error(`the pages never agreed on the jump to round ${round + 1}`)
 }
 
+/**
+ * M38: the top bar's clock shows the coming round's full time through round `round`'s
+ * countdown (0:45 in `?fast` rounds, 3:00 in full ones), and a screenshot shows it.
+ */
+async function countdownClock(page, round, size, label = `round${round + 1}`) {
+  const s = await waitFor(
+    page,
+    s => s.matchPhase?.kind === 'countdown' && s.matchPhase.round === round,
+    { label: `round ${round + 1} countdown`, timeout: 30_000 }
+  )
+  const secs = Math.round(s.match.roundMs / 1000)
+  const full = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+  // The clock follows the phase on the next animation frame, which a jump can delay.
+  await frames(page, 2)
+  const clock = await page.textContent('[data-testid="clock"]')
+  if (clock !== full)
+    throw new Error(`${size}: the ${label} countdown clock reads ${clock}`)
+  await shot(page, `match-${size}-${label}-countdown`)
+}
+
+/** M38 at full length: the round 1 and round 2 countdowns both show 3:00. */
+async function countdowns(browser) {
+  const context = await browser.newContext(SIZES.small)
+  const code = roomCode()
+  const a = await context.newPage()
+  const b = await context.newPage()
+  const errors = [watchErrors(a, 'A'), watchErrors(b, 'B')]
+  await a.goto(`${BASE}/r/${code}?local&calm&pid=aaaaaaaa38`)
+  await waitFor(a, s => s.admission === 'seated')
+  await b.goto(`${BASE}/r/${code}?local&calm&pid=zzzzzzzz38`)
+  await waitFor(b, s => s.seats.length === 2)
+  await dev(a, g => g.ready(true))
+  await dev(b, g => g.ready(true))
+  await countdownClock(b, 0, 'small', 'full-round1')
+  await waitFor(a, s => s.matchPhase?.kind === 'play', { label: 'play' })
+  await jumpToEnd(a, b, 0)
+  await countdownClock(b, 1, 'small', 'full-round2')
+  errors.forEach(e => e.check())
+  await context.close()
+  console.log('countdowns: round 1 and round 2 count down from 3:00')
+}
+
 /** True when a lawn picture on the match end has paint on it. */
 function lawnsPainted(page) {
   return page.evaluate(() =>
@@ -192,7 +238,14 @@ async function checkMenu(page, size) {
   await press(page, size, 'role=button[name="Back"]')
   await press(page, size, 'role=button[name="How to Play"]')
   const help = await dialogText(page)
-  if (!help?.includes('Win 2 rounds to take the match.'))
+  // The 11 How to Play lines, then What Brenda Counts.
+  if (
+    !help?.includes(
+      'Press something while it falls over the fence to catch it.'
+    ) ||
+    !help.includes('What Brenda Counts') ||
+    !help.includes('Win 2 of 3 rounds.')
+  )
     throw new Error(`${size}: How to Play shows ${help}`)
   await shot(page, `match-end-${size}-help`)
   await press(page, size, 'role=button[name="Back"]')
@@ -203,16 +256,18 @@ async function checkMenu(page, size) {
   if (after >= before) throw new Error(`${size}: the round stopped in the menu`)
   if (await noticeText(page))
     throw new Error(`${size}: a tip shows after Hide Tips`)
-  await dev(page, g => g.act.gust('over', 1))
-  await sleep(2500)
-  const tips = (await dev(page, g => g.events(40))).filter(
-    e =>
-      e.type === 'note' && e.detail.kind === 'tip' && e.at > Date.now() - 2600
+  // Biscuit circles, which earns a round 1 tip, but none shows after Hide Tips.
+  const hiddenAt = await dev(page, g => g.state().now)
+  await dev(page, g => g.act.dig(2000))
+  await sleep(4500)
+  const events = await dev(page, g => g.events(60))
+  const tips = events.filter(
+    e => e.type === 'note' && e.detail.kind === 'tip' && e.at > hiddenAt
   )
   if (tips.length || (await noticeText(page)))
     throw new Error(`${size}: tips after Hide Tips: ${JSON.stringify(tips)}`)
-  const vane = (await dev(page, g => g.events(40))).some(e => e.type === 'vane')
-  if (!vane) throw new Error(`${size}: the test gust never swung the vane`)
+  if (!events.some(e => e.type === 'circle' && e.at > hiddenAt))
+    throw new Error(`${size}: Biscuit never circled for the Hide Tips check`)
   console.log(`${size}: menu, settings, How to Play and Hide Tips ok`)
 }
 
@@ -227,7 +282,8 @@ async function end(browser, size) {
   // Fixed pids make A the host.
   await a.goto(`${BASE}/r/${code}?local&fast&calm&pid=aaaaaaaa23`)
   await waitFor(a, s => s.admission === 'seated')
-  await b.goto(`${BASE}/r/${code}?local&fast&calm&pid=zzzzzzzz23`)
+  // B is a new player, so it gets round 1's tips until Hide Tips.
+  await b.goto(`${BASE}/r/${code}?local&fast&calm&pid=zzzzzzzz23&first=1`)
   await waitFor(b, s => s.seats.length === 2)
   await waitFor(b, s => s.bestRtt < 1000, { label: 'clock sync' })
   const hostName = (await dev(a, g => g.state())).me.name
@@ -236,7 +292,7 @@ async function end(browser, size) {
   await dev(b, g => g.ready(true))
   for (const p of [a, b])
     await waitFor(p, s => s.matchPhase?.kind === 'play', { label: 'play' })
-  await waitForNotice(b, 'Throw the gnome over the fence.', 6000)
+  await waitForNotice(b, 'Throw the gnomes over the fence.', 6000)
   await checkMenu(b, size)
 
   // The host wins 2 rounds to 0: the guest's lawn dries before each verdict.
@@ -248,6 +304,7 @@ async function end(browser, size) {
         label: `verdict ${round + 1}`,
         timeout: 20_000
       })
+    if (round === 0) await countdownClock(b, 1, size)
   }
   for (const p of [a, b])
     await waitFor(p, s => s.phase === 'over', {
@@ -291,6 +348,24 @@ async function end(browser, size) {
   const second = (await dev(b, g => g.state())).match
   if (second.seed === first.seed)
     throw new Error(`${size}: the rematch kept seed ${first.seed}`)
+  // M38: nothing from the last match is left for a screen reader to read again.
+  for (const [p, who] of [
+    [a, 'host'],
+    [b, 'guest']
+  ]) {
+    await waitFor(p, s => s.matchPhase?.kind === 'countdown', {
+      label: 'rematch countdown'
+    })
+    const heard = await p.evaluate(() => ({
+      live: document.querySelector('[aria-live="polite"].sr-only')?.textContent,
+      verdict: document.querySelector('[data-testid="verdict"]')?.textContent
+    }))
+    if (/match|round/i.test(`${heard.live ?? ''} ${heard.verdict ?? ''}`))
+      throw new Error(
+        `${size}: the ${who}'s rematch countdown still says ${JSON.stringify(heard)}`
+      )
+  }
+  await countdownClock(b, 0, size, 'rematch')
   for (const p of [a, b])
     await waitFor(p, s => s.matchPhase?.kind === 'play', { label: 'play 2' })
   console.log(
@@ -363,15 +438,16 @@ async function backFromLobby(browser) {
 
 const browser = await launch()
 try {
-  if (ONLY !== 'end') {
+  if (!ONLY || ONLY === 'clock') {
     await run(browser, { size: 'desktop', skew: false })
     await run(browser, { size: 'phone', skew: true })
     await run(browser, { size: 'small', skew: false })
   }
-  if (ONLY !== 'clock') {
+  if (ONLY !== 'clock' && ONLY !== 'countdowns') {
     await backFromLobby(browser)
     for (const size of ['desktop', 'phone', 'small']) await end(browser, size)
   }
+  if (!ONLY || ONLY === 'countdowns') await countdowns(browser)
   console.log('match: ok')
 } finally {
   await browser.close()

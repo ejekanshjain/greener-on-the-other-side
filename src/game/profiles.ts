@@ -3,16 +3,26 @@
  * autopilot and the headless balance runs (PLAN.md 2.9). Every number lives here.
  */
 
-/** What a bot does with the finale's crate gnomes and heavy junk. */
+/** What a bot does with the finale's crate gnomes, heavy junk and last seconds. */
 export interface FinalePlan {
   /** `carry` moves them onto the patio, `throw` sends them over, `keep` leaves them. */
   gnomes: 'carry' | 'throw' | 'keep'
   /** The least time between two finale throws, in ms. */
   gapMs: number
-  /** Throws the bin, trampoline and mower too, before the gnomes while the arm is fresh. */
+  /** Throws the bin and trampoline too, before the gnomes while the arm is fresh. */
   junk: boolean
-  /** Mows instead of throwing once the gnomes are gone. */
+  /**
+   * The mower: thrown with the other junk (`junk`), kept all round (`keep`), or kept for
+   * mowing and thrown `leftMs` before 0:00.
+   */
+  mower: 'junk' | 'keep' | { leftMs: number }
+  /** Mows at twice its pace instead of throwing once its gnomes are gone. */
   mowAfter: boolean
+  /**
+   * From this long before 0:00 in a full round, mows columns one pass would stripe, back
+   * to back, emptying the bag when it fills; 0 never. A player throws nothing more then.
+   */
+  closeMs: number
 }
 
 /** One bot's habits. Times are real milliseconds; `?fast` rounds keep them. */
@@ -61,7 +71,14 @@ export const PEMBERTON: readonly [Profile, Profile, Profile] = [
     patBiscuit: 0.5,
     catchChance: 0,
     spiteFirst: true,
-    finale: { gnomes: 'carry', gapMs: 0, junk: false, mowAfter: false }
+    finale: {
+      gnomes: 'carry',
+      gapMs: 0,
+      junk: false,
+      mower: 'keep',
+      mowAfter: false,
+      closeMs: 0
+    }
   },
   {
     name: 'normal',
@@ -76,7 +93,14 @@ export const PEMBERTON: readonly [Profile, Profile, Profile] = [
     patBiscuit: 0.75,
     catchChance: 0,
     spiteFirst: true,
-    finale: { gnomes: 'throw', gapMs: 2500, junk: false, mowAfter: false }
+    finale: {
+      gnomes: 'throw',
+      gapMs: 2500,
+      junk: false,
+      mower: 'keep',
+      mowAfter: false,
+      closeMs: 0
+    }
   },
   {
     name: 'petty',
@@ -91,7 +115,15 @@ export const PEMBERTON: readonly [Profile, Profile, Profile] = [
     patBiscuit: 0.9,
     catchChance: 0,
     spiteFirst: true,
-    finale: { gnomes: 'throw', gapMs: 0, junk: true, mowAfter: false }
+    // He keeps his mower to re-mow late, then throws it in the last seconds.
+    finale: {
+      gnomes: 'throw',
+      gapMs: 0,
+      junk: true,
+      mower: { leftMs: 6000 },
+      mowAfter: false,
+      closeMs: 15_000
+    }
   }
 ]
 
@@ -110,7 +142,14 @@ export const PLAYERS = {
     patBiscuit: 0.5,
     catchChance: 0,
     spiteFirst: false,
-    finale: { gnomes: 'throw', gapMs: 0, junk: false, mowAfter: false }
+    finale: {
+      gnomes: 'throw',
+      gapMs: 0,
+      junk: false,
+      mower: 'keep',
+      mowAfter: false,
+      closeMs: 0
+    }
   },
   regular: {
     name: 'regular',
@@ -125,7 +164,14 @@ export const PLAYERS = {
     patBiscuit: 0.75,
     catchChance: 0.1,
     spiteFirst: false,
-    finale: { gnomes: 'throw', gapMs: 0, junk: false, mowAfter: true }
+    finale: {
+      gnomes: 'throw',
+      gapMs: 0,
+      junk: false,
+      mower: 'keep',
+      mowAfter: true,
+      closeMs: 8000
+    }
   },
   expert: {
     name: 'expert',
@@ -140,7 +186,15 @@ export const PLAYERS = {
     patBiscuit: 0.9,
     catchChance: 0.3,
     spiteFirst: false,
-    finale: { gnomes: 'throw', gapMs: 0, junk: true, mowAfter: false }
+    // The closer: its gnomes go over, then it mows for stripes from 0:18 left.
+    finale: {
+      gnomes: 'throw',
+      gapMs: 0,
+      junk: false,
+      mower: 'keep',
+      mowAfter: false,
+      closeMs: 18_000
+    }
   }
 } as const satisfies Record<string, Profile>
 

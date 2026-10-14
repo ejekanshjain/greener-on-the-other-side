@@ -1,15 +1,19 @@
 // M14 Biscuit on two ?local pages at three sizes. Both lawns dig the same seeded holes.
 // A gnome put down by a real press gets a bark at 1.5s and lies on the back row by about
 // 5s. A real press on the item in his mouth takes it back. A real tap while he circles
-// sits him and stops the hole; a missed circle digs one and counts in blame.
+// sits him and stops the hole; a missed circle digs one and counts in blame. A new
+// player's dig tip shows in round 1, and the bark and fetch tips only in round 2.
 import {
   dev,
+  frames,
   hold,
   launch,
   localPair,
   shot,
   sleep,
-  startMatch
+  startMatch,
+  waitFor,
+  waitForNotice
 } from './lib.mjs'
 
 /** Waits until a dev query on `page` returns something truthy, or throws `why`. */
@@ -42,10 +46,18 @@ function event(page, type, since, why, timeout) {
 const now = page => dev(page, g => g.state().now)
 const garden = page => dev(page, g => g.garden())
 const ROW = 12
+const DIG_TIP = 'Press Biscuit now, or he digs a hole.'
+const BARK_TIP = "Biscuit's eyeing that. Throw it first."
+// The fetch tip names what he carries; the round 2 check spawns a gnome.
+const FETCH_TIP = 'Biscuit has your gnome. Press it.'
 
 async function run(browser, size) {
   const touch = size !== 'desktop'
-  const { a, b, check, context } = await localPair(browser, { size })
+  const { a, b, check, context } = await localPair(browser, {
+    size,
+    // A new player's tips, so the dig and bark tips show.
+    query: 'first=1'
+  })
   await startMatch(a, b)
   const [host, guest] =
     (await dev(a, g => g.state().role)) === 'host' ? [a, b] : [b, a]
@@ -66,6 +78,13 @@ async function run(browser, size) {
   if (dug.length !== 1 || hostHoles.join() !== guestHoles.join())
     throw new Error(`${size}: seeded holes differ ${dug} vs guest`)
   console.log(`${size}: both lawns dug patch ${dug[0]} in the first dig`)
+  // The jump's catch-up can stall frames for a moment; real presses wait it out.
+  await frames(host)
+  // A real tap on the patio unlocks sound first, as a player's Ready click would. The
+  // unlock can stall the page's frames for 1s, which would swallow the gnome's press.
+  await hold(host, await dev(host, g => g.toClient(560, 720)), 60, touch)
+  await sleep(200)
+  await frames(host, 10)
 
   // 2. A gnome put down by a real press gets a bark at 1.5s, then sits on the back row.
   await dev(host, g => {
@@ -154,11 +173,27 @@ async function run(browser, size) {
   const notes = (await dev(host, g => g.events(150)))
     .filter(e => e.type === 'note')
     .map(e => e.detail.text)
-  for (const tip of [
-    'Tap Biscuit before he digs.',
-    "Biscuit's eyeing that. Throw it first."
-  ])
-    if (!notes.includes(tip)) throw new Error(`${size}: no tip "${tip}"`)
+  // Round 1 teaches the dig; barking and fetching wait for round 2.
+  if (!notes.includes(DIG_TIP)) throw new Error(`${size}: no tip "${DIG_TIP}"`)
+  if (notes.includes(BARK_TIP) || notes.some(n => n.startsWith('Biscuit has')))
+    throw new Error(`${size}: a bark or fetch tip showed in round 1`)
+
+  // 6. In round 2 a bark earns its tip, and so does the fetch that follows.
+  await dev(host, g => g.jump(100_000, 1))
+  for (const p of [host, guest])
+    await waitFor(p, s => s.matchPhase?.round === 1, { label: 'round 2' })
+  await frames(host)
+  await dev(host, g => {
+    g.act.clearItems()
+    g.act.dogReady(0)
+    g.spawn('gnome', 7 * 12 + 5)
+  })
+  await waitForNotice(host, BARK_TIP, 6000)
+  await shot(host, `biscuit-${size}-bark-tip`)
+  // He picks it up while the bark tip shows; the fetch tip comes next.
+  await waitForNotice(host, FETCH_TIP, 8000)
+  await shot(host, `biscuit-${size}-fetch-tip`)
+  console.log(`${size}: round 2 showed the bark and fetch tips`)
   check()
   await context.close()
 }

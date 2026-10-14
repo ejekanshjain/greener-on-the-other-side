@@ -1,3 +1,4 @@
+import { countParts, type Counted, type CountLine } from '../game/counts'
 import { revealMoment, type RevealTimings } from '../game/reveal'
 import { blameText, brendaLine, findings, type Score } from '../game/score'
 import { PEEK_TINT } from '../game/tuning'
@@ -46,6 +47,8 @@ interface RevealLawn {
   patches: Uint8Array
   markers: TrueLawn['markers']
   score: Score
+  /** What Brenda counted beside Green, Stripes, Tidy and Junk, '' for none. */
+  counts: string[]
   /** Brenda's line, wrapped. */
   line: string[]
   /** The blame line under the loser's score, wrapped, or none. */
@@ -73,6 +76,11 @@ const LINE_KEYS: readonly (keyof Score)[] = [
   'junk',
   'total'
 ]
+const COUNT_LINES: readonly CountLine[] = ['green', 'stripes', 'tidy', 'junk']
+/** The score labels and counts, in design units. */
+const LABEL_SIZE = 22
+/** The gap a count keeps from its label and its score. */
+const COUNT_GAP = 10
 /** Which lawn each cached layer holds, and whether it's the tinted lie. */
 type Side = 'mine' | 'theirs'
 const LAYERS: readonly [Side, boolean][] = [
@@ -205,6 +213,11 @@ export class RevealScene {
     }
   }
 
+  /** The counts beside Green, Stripes, Tidy and Junk on each board, for dev checks. */
+  counts(): { mine: string[]; theirs: string[] } {
+    return { mine: this.mine?.counts ?? [], theirs: this.theirs?.counts ?? [] }
+  }
+
   dispose(): void {
     this.board.dispose()
     for (const layer of this.lawnLayers) layer.dispose()
@@ -232,6 +245,9 @@ export class RevealScene {
       : [result.scores[1], result.scores[0]]
     const margin = Math.abs(myScore.total - theirScore.total)
     const iWon = (result.winner === 'h') === source.iHost
+    const [myCounts, theirCounts] = source.iHost
+      ? result.counts
+      : [result.counts[1], result.counts[0]]
     const wrap = (text: string) => wrapText(ctx, text, LAWN_W_PX - 10, 19)
     const blameFor = (lawn: TrueLawn, loser: boolean, name: string | null) => {
       if (!loser || !result.blame || !lawn.blame) return []
@@ -242,12 +258,14 @@ export class RevealScene {
     this.mine = {
       ...mineLawn,
       score: myScore,
+      counts: fitCounts(ctx, myScore, myCounts),
       line: wrap(`"${brendaLine(findings(mineLawn), margin, iWon && !draw)}"`),
       blame: blameFor(mineLawn, !iWon && !draw, null)
     }
     this.theirs = {
       ...theirLawn,
       score: theirScore,
+      counts: fitCounts(ctx, theirScore, theirCounts),
       line: wrap(
         `"${brendaLine(findings(theirLawn), margin, !iWon && !draw)}"`
       ),
@@ -326,8 +344,16 @@ export class RevealScene {
         const value =
           i === 4 ? lawn.score.total : Math.round(lawn.score[key] * shown)
         const bold =
-          i === 4 ? { font: 'marker' as const, size: 26 } : { size: 22 }
+          i === 4 ? { font: 'marker' as const, size: 26 } : { size: LABEL_SIZE }
         sketchText(ctx, label, x + 8, y, { ...bold, align: 'left' })
+        // What she counted sits just left of the score, in soft ink.
+        const counted = lawn.counts[i]
+        if (counted)
+          sketchText(ctx, counted, x + COUNT_RIGHT, y, {
+            size: LABEL_SIZE,
+            align: 'right',
+            color: palette.inkSoft
+          })
         sketchText(ctx, String(value), x + LAWN_W_PX - 8, y, {
           ...bold,
           align: 'right'
@@ -495,6 +521,31 @@ export function roundHeading(source: RevealSource, decided: boolean): string {
 function tintFor(side: Side, source: RevealSource | null): number {
   if (side === 'mine') return -1
   return PEEK_TINT[source?.round ?? 0] ?? PEEK_TINT[0]
+}
+
+/** A count's right edge from the lawn's left: clear of a three-character score. */
+const COUNT_RIGHT = LAWN_W_PX - 8 - 36 - COUNT_GAP
+
+/**
+ * The count beside each of Green, Stripes, Tidy and Junk, measured to fit between its
+ * label and its score. One too wide keeps only its first kind.
+ */
+function fitCounts(
+  ctx: CanvasRenderingContext2D,
+  score: Score,
+  counted: Counted
+): string[] {
+  ctx.save()
+  ctx.font = `${LABEL_SIZE}px ${FONT_HAND}`
+  const out = COUNT_LINES.map((line, i) => {
+    const parts = countParts(line, score, counted)
+    const room =
+      COUNT_RIGHT - 8 - ctx.measureText(LABELS[i] as string).width - COUNT_GAP
+    const all = parts.join(', ')
+    return ctx.measureText(all).width <= room ? all : (parts[0] ?? '')
+  })
+  ctx.restore()
+  return out
 }
 
 /** The paper board the reveal sits on. */

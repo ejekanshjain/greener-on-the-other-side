@@ -144,7 +144,7 @@ export function noCounts(): Counts {
  * in Biscuit's mouth still counts, since he only moves it around your lawn, and so does
  * sunk heavy junk.
  */
-function lying(item: Item): boolean {
+export function lying(item: Item): boolean {
   return (
     item.state === 'rest' ||
     item.state === 'slide' ||
@@ -270,12 +270,16 @@ export function reportStripes(patches: Uint8Array): number {
   return mask
 }
 
-/** A thing lying on the lawn in a final: what it is, its look, and whether it sank in. */
+/**
+ * A thing lying on the lawn in a final: what it is, its look, whether it sank in, and
+ * whether it's heavy junk that came from next door.
+ */
 export interface FinalMarker {
   patch: number
   kind: ItemKind
   look: number
   sunk: boolean
+  theirs: boolean
 }
 
 /** One garden's true lawn at 0:00, for Brenda: what she scores, the blame, and every item. */
@@ -303,7 +307,8 @@ export function finalReport(garden: Garden): FinalReport {
         patch: snail.patch,
         kind: 'snailShell',
         look: 0,
-        sunk: false
+        sunk: false,
+        theirs: false
       })
   for (const item of garden.items) {
     if (!lying(item)) continue
@@ -313,7 +318,9 @@ export function finalReport(garden: Garden): FinalReport {
       patch,
       kind: item.kind,
       look: item.look,
-      sunk: item.state === 'sunk'
+      sunk: item.state === 'sunk',
+      // Their throw that you never picked up; your own bounced back counts as yours.
+      theirs: isHeavy(item.kind) && item.fromNeighbour && !item.back
     })
   }
   return {

@@ -145,7 +145,10 @@ describe('weeds', () => {
       ly: weed.ly
     })
     garden.command({ type: 'hold', lx: weed.lx, ly: weed.ly - 70 })
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     const yankedAt = garden.t + TICK_MS
     garden.advanceTo(yankedAt)
     const item = garden.items.find(i => i.kind === 'weed')
@@ -232,7 +235,10 @@ describe('snails', () => {
       ly: snail.ly
     })
     garden.command({ type: 'hold', lx: 120, ly: snail.ly })
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     garden.advanceTo(garden.t + TICK_MS)
     const count = garden.snails.length
     const shell = garden.items.find(i => i.kind === 'snailShell')

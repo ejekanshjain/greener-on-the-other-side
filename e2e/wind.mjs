@@ -1,17 +1,27 @@
 // M15 wind on two ?local pages at three sizes. Both pages swing the vane and start each
 // gust at the same moment. An over-fence gust is a tailwind on one page and a headwind on
 // the other, checked with a real swipe on each page during the same gust. An along gust
-// pushes the two pages opposite ways in their own frames.
+// pushes the two pages opposite ways in their own frames. A new player gets no wind tip
+// in round 1, and in round 2 gets the line for the first gust in their own frame before
+// it blows.
 import {
   dev,
+  frames,
   launch,
   localPair,
   mouseFlick,
   shot,
   sleep,
   startMatch,
-  touchFlick
+  touchFlick,
+  waitFor
 } from './lib.mjs'
+
+const WIND_TIPS = {
+  tail: 'Wind in 2s. It carries your throws further.',
+  head: 'Wind in 2s. It pushes your throws back.',
+  side: 'Wind in 2s. It pushes throws sideways.'
+}
 
 /** Waits until a dev query on `page` returns something truthy, or throws `why`. */
 async function until(page, fn, arg, why, timeout = 6000) {
@@ -38,14 +48,19 @@ function event(page, type, since, why, timeout) {
 const now = page => dev(page, g => g.state().now)
 const wind = page => dev(page, g => g.garden().wind)
 
-/** Jumps the host so the vane of gust `k` swings 1.5s from now, and waits on both pages. */
-async function toGust(host, guest, k) {
+/**
+ * Jumps the host to `leadMs` before gust `k`, so its vane swings 2s before it, and waits
+ * on both pages.
+ */
+async function toGust(host, guest, k, leadMs = 3500) {
   const { roundMs } = (await dev(host, g => g.state())).match
   const gust = (await wind(host)).gusts[k]
-  const at = gust.at - 3500
+  const at = gust.at - leadMs
   await dev(host, (g, ms) => g.jump(ms), roundMs - at)
-  for (const p of [host, guest])
+  for (const p of [host, guest]) {
     await until(p, (g, t) => g.garden().t >= t, at, 'no catch-up')
+    await frames(p)
+  }
   return gust
 }
 
@@ -76,7 +91,11 @@ async function flickGnome(page, col, touch, size) {
 
 async function run(browser, size) {
   const touch = size !== 'desktop'
-  const { a, b, check, context } = await localPair(browser, { size })
+  const { a, b, check, context } = await localPair(browser, {
+    size,
+    // A new player's tips, so the wind tip shows.
+    query: 'first=1'
+  })
   await startMatch(a, b)
   const [host, guest] =
     (await dev(a, g => g.state().role)) === 'host' ? [a, b] : [b, a]
@@ -131,13 +150,72 @@ async function run(browser, size) {
   if (ha.side === 0 || ha.side !== -ga.side)
     throw new Error(`${size}: along sides ${ha.side} and ${ga.side}`)
   await shot(host, `wind-${size}-along`)
-  const notes = (await dev(host, g => g.events(150)))
-    .filter(e => e.type === 'note')
-    .map(e => e.detail.text)
-  if (!notes.includes("Wind's coming. Throw with it."))
-    throw new Error(`${size}: no wind tip`)
   console.log(
     `${size}: the along gust blows ${ha.side} on the host, ${ga.side} on the guest`
+  )
+  // Round 1 teaches no wind.
+  for (const p of [host, guest]) {
+    const early = (await dev(p, g => g.events(300))).filter(
+      e => e.type === 'note' && Object.values(WIND_TIPS).includes(e.detail.text)
+    )
+    if (early.length) throw new Error(`${size}: a wind tip showed in round 1`)
+  }
+
+  // 4. Round 2's first gust gets the wind tip before it blows, with the line for that
+  // gust in each page's own frame: a tailwind on one page is a headwind on the other.
+  await dev(host, g => g.jump(170_000, 1))
+  for (const p of [host, guest])
+    await waitFor(p, s => s.matchPhase?.round === 1, { label: 'round 2' })
+  // Biscuit's urgent tips would push a wind tip past its gust, as the queue intends.
+  for (const p of [host, guest]) await dev(p, g => g.act.quietDog())
+  // Let any tip on show finish on both pages, so neither wind tip waits behind one.
+  for (const p of [host, guest])
+    await until(
+      p,
+      () => !document.querySelector('[data-testid="tip"]'),
+      null,
+      'tip line busy',
+      12_000
+    )
+  // A jump holds a page's frames for about 1s, and a frame that long raises no tips, so
+  // land 6s before the gust: its vane swings 2s before it.
+  const first = await toGust(host, guest, 0, 6000)
+  if (first.kind !== 'over')
+    throw new Error(`${size}: round 2 opens with ${first.kind}`)
+  const t3 = await now(host)
+  const lines = []
+  for (const p of [host, guest]) {
+    const blow = await event(p, 'gust', t3, `${size}: no round 2 gust`)
+    const tip = (await dev(p, g => g.events(200))).find(
+      e =>
+        e.type === 'note' &&
+        e.at >= t3 &&
+        Object.values(WIND_TIPS).includes(e.detail.text)
+    )
+    if (!tip || tip.at >= blow.at) {
+      const seen = (await dev(p, g => g.events(200)))
+        .filter(e =>
+          ['vane', 'gust', 'note', 'noteEnd', 'liveFrame', 'catchUp'].includes(
+            e.type
+          )
+        )
+        .map(e => `${e.at - t3} ${e.type} ${JSON.stringify(e.detail)}`)
+      throw new Error(
+        `${size}: wind tip ${JSON.stringify(tip)} not before the gust at ${blow.at - t3} ms:\n${seen.join('\n')}`
+      )
+    }
+    const want = blow.detail.dir === 1 ? WIND_TIPS.tail : WIND_TIPS.head
+    if (tip.detail.text !== want)
+      throw new Error(
+        `${size}: "${tip.detail.text}" for a gust with dir ${blow.detail.dir}`
+      )
+    lines.push(tip.detail.text)
+  }
+  if (lines[0] === lines[1])
+    throw new Error(`${size}: both pages read "${lines[0]}"`)
+  await shot(host, `wind-${size}-tip`)
+  console.log(
+    `${size}: round 2 wind tips before the gust: host "${lines[0]}", guest "${lines[1]}"`
   )
   check()
   await context.close()

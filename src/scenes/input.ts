@@ -3,6 +3,7 @@ import { patchAt } from '../game/grid'
 import { HeavyGrip } from '../game/heavy'
 import { JobPicker, releaseRule, type GrassJob } from '../game/press'
 import {
+  MISS_NEAR_PX,
   MOWER_LIFT,
   REACH_MOUSE_PX,
   REACH_TOUCH_PX,
@@ -42,17 +43,29 @@ export class PressController {
   private readonly grip = new HeavyGrip()
   private readonly lawn = { x: 0, y: 0 }
   private mode: 'idle' | 'hold' | 'heavy' | 'grass' | 'spent' = 'idle'
+  /** The garden the press began on; a press never carries over to another garden. */
+  private pressGarden: Garden | null = null
   /** What the garden is doing for this press: pouring, mowing or neither. */
   private active: 'water' | 'mow' | null = null
   private pressX = 0
   private pressY = 0
+  /** Where and when the press started in client pixels, and how far it has moved since. */
+  private downX = 0
+  private downY = 0
+  private downAt = 0
+  private movedPx = 0
   private touch = false
   readonly view: PressView = { job: null, lx: 0, ly: 0, since: 0 }
 
+  /**
+   * `garden` gives the garden presses reach now, or null; `halted` says a playtest pause
+   * holds the game still, which cuts off a press in progress.
+   */
   constructor(
     canvas: HTMLCanvasElement,
     private readonly viewport: Viewport,
-    private readonly garden: () => Garden | null
+    private readonly garden: () => Garden | null,
+    private readonly halted: () => boolean = () => false
   ) {
     this.tracker = new PointerTracker(canvas, {
       toLogical: (x, y, out) => viewport.toLogical(x, y, out),
@@ -68,9 +81,10 @@ export class PressController {
    * in time. Call it every frame.
    */
   update(now: number): void {
+    if (this.pressGarden && this.halted()) this.cutOff()
     if (this.mode === 'heavy' && this.grip.grip === 'wait') {
       if (this.grip.tick(now) === 'lifted')
-        this.garden()?.command({ type: 'lift' })
+        this.current()?.command({ type: 'lift' })
       return
     }
     if (this.mode !== 'grass' || this.picker.job !== 'wait') return
@@ -81,14 +95,29 @@ export class PressController {
     this.tracker.dispose()
   }
 
+  /**
+   * The garden this press may still act on: the one it began on, while it's the one
+   * presses reach. A press held across a swap, such as the yard closing as a round starts,
+   * does nothing more.
+   */
+  private current(): Garden | null {
+    const garden = this.garden()
+    return garden !== null && garden === this.pressGarden ? garden : null
+  }
+
   private press(x: number, y: number, e: PointerEvent): void {
     const garden = this.garden()
+    this.pressGarden = garden
     if (!garden) return
     this.touch = e.pointerType === 'touch'
     if (this.touch && inEdgeGuard(e.clientX, window.innerWidth)) return
     const lawn = toLawn(x, y, this.lawn)
     this.pressX = lawn.x
     this.pressY = lawn.y
+    this.downX = e.clientX
+    this.downY = e.clientY
+    this.downAt = e.timeStamp
+    this.movedPx = 0
     this.sampler.reset()
     this.sampler.add(e.clientX, e.clientY, e.timeStamp)
     const reach =
@@ -138,13 +167,17 @@ export class PressController {
   private drag(x: number, y: number, e: PointerEvent): void {
     if (this.mode !== 'hold' && this.mode !== 'heavy' && this.mode !== 'grass')
       return
-    const garden = this.garden()
+    const garden = this.current()
     if (!garden) return
     // Coalesced events carry the samples between frames, which sharpens swipe speeds.
     const samples = e.getCoalescedEvents?.() ?? []
     if (samples.length === 0) samples.push(e)
     for (const s of samples) {
       this.sampler.add(s.clientX, s.clientY, s.timeStamp)
+      this.movedPx = Math.max(
+        this.movedPx,
+        Math.hypot(s.clientX - this.downX, s.clientY - this.downY)
+      )
       if (this.mode === 'grass')
         this.picker.move(s.clientX, s.clientY, s.timeStamp)
     }
@@ -175,14 +208,17 @@ export class PressController {
     if (was === 'wait' && grip === 'lifted') garden.command({ type: 'lift' })
     if (grip === 'drag') garden.command({ type: 'hold', lx, ly })
     else if (grip === 'down') {
-      garden.command({ type: 'release', release: { type: 'putDown' } })
+      garden.command({
+        type: 'release',
+        release: { type: 'putDown', reason: 'slow' }
+      })
       this.mode = 'spent'
     }
   }
 
   /** Carries out the grass job at the finger's latest lawn point. */
   private grassStep(now: number): void {
-    const garden = this.garden()
+    const garden = this.current()
     if (!garden) return
     const job = this.picker.job
     this.view.job = job
@@ -208,32 +244,52 @@ export class PressController {
   }
 
   /**
-   * A fast flick that missed: grab the nearest light thing within 44 px of the press, or
-   * nothing.
+   * A fast flick that started on grass: the garden grabs the nearest light thing within
+   * 44 px of the press, or reports the miss. The press then follows as a hold, which
+   * does nothing when the garden grabbed nothing.
    */
   private snap(garden: Garden, lx: number, ly: number): void {
     this.view.job = null
-    const target = garden.hitTest(
-      this.pressX,
-      this.pressY,
-      SNAP_REACH_PX / this.viewport.scale
-    )
-    // Heavy junk never snaps: it needs a lift, and a flick would only drag it.
-    const item = target?.type === 'item' ? garden.item(target.id) : undefined
-    if (!target || (item && isHeavy(item.kind))) {
-      this.mode = 'spent'
-      return
-    }
-    garden.command({ type: 'grab', target, lx: this.pressX, ly: this.pressY })
-    garden.command({ type: 'hold', lx, ly })
+    const scale = this.viewport.scale
+    garden.command({
+      type: 'snap',
+      lx: this.pressX,
+      ly: this.pressY,
+      toX: lx,
+      toY: ly,
+      reach: SNAP_REACH_PX / scale,
+      near: MISS_NEAR_PX / scale
+    })
     this.mode = 'hold'
+  }
+
+  /**
+   * Ends the press on the garden it began on, as a press the phone cuts off would, when a
+   * playtest pause begins. It does nothing more until the finger lifts.
+   */
+  private cutOff(): void {
+    const garden = this.pressGarden
+    this.pressGarden = null
+    const mode = this.mode
+    const active = this.active
+    this.active = null
+    this.view.job = null
+    if (mode === 'idle' || mode === 'spent' || !garden) return
+    this.mode = 'spent'
+    if (active === 'water') garden.command({ type: 'pourEnd' })
+    if (active === 'mow') garden.command({ type: 'mowEnd' })
+    if (mode === 'hold' || mode === 'heavy')
+      garden.command({
+        type: 'release',
+        release: { type: 'putDown', reason: 'cancel' }
+      })
   }
 
   private release(e: PointerEvent): void {
     const mode = this.mode
     this.mode = 'idle'
     this.view.job = null
-    const garden = this.garden()
+    const garden = this.current()
     const active = this.active
     this.active = null
     if (!garden) return
@@ -244,7 +300,14 @@ export class PressController {
     if (!cancelled) this.sampler.add(e.clientX, e.clientY, e.timeStamp)
     garden.command({
       type: 'release',
-      release: releaseRule(this.sampler.peak(e.timeStamp), cancelled)
+      release: releaseRule(this.sampler.peak(e.timeStamp), {
+        cancelled,
+        heldMs: e.timeStamp - this.downAt,
+        movedPx: Math.max(
+          this.movedPx,
+          Math.hypot(e.clientX - this.downX, e.clientY - this.downY)
+        )
+      })
     })
   }
 }

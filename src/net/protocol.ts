@@ -3,6 +3,7 @@
  * validate everything, because any browser in the room can send anything.
  */
 
+import { countedFromWire } from '../game/counts'
 import type { Blame } from '../game/garden'
 import { BLAME_KEYS } from '../game/report'
 import type { Winner } from '../game/score'
@@ -106,6 +107,10 @@ export type Msg =
        * (round 1 is 1). The guest answers with its `result` for each.
        */
       need?: number
+      /** Outside rounds: the sender is a new player, so the neighbour's lobby shows First Match. */
+      first?: boolean
+      /** In the lobby: the yard step the sender is on, 1 to 3, while their yard is open. */
+      yard?: number
     }
   | ({ k: 'start' } & MatchInfo)
   | { k: 'throw'; items: ThrowItemMsg[]; clips: ClipMsg[] }
@@ -127,6 +132,8 @@ export type Msg =
       w: Winner
       tally: [number, number]
       totals: [number, number]
+      /** What Brenda counted on each lawn, host first, as `countedToWire` packs it. */
+      ct: [number[], number[]]
       /** The own fault Brenda names under the loser's score, or ''. */
       bl: keyof Blame | ''
       over: boolean
@@ -226,6 +233,9 @@ function isResult(v: Obj): boolean {
     (v.w === 'h' || v.w === 'g' || v.w === 'd') &&
     isPair(v.tally, 0, 3) &&
     isPair(v.totals, -6000, 6000) &&
+    Array.isArray(v.ct) &&
+    v.ct.length === 2 &&
+    v.ct.every(c => countedFromWire(c) !== null) &&
     (v.bl === '' || BLAME_KEYS.includes(v.bl as keyof Blame)) &&
     isBool(v.over) &&
     isStr(v.hf, FINAL_MAX_CHARS) &&
@@ -279,7 +289,9 @@ export function isMsg(v: unknown): v is Msg {
         (v.wait === undefined || isInt(v.wait, 0, 2)) &&
         (v.waitCopy === undefined || isStr(v.waitCopy, LAWN_MAX_CHARS)) &&
         (v.waitCopyAt === undefined || isInt(v.waitCopyAt, 0)) &&
-        (v.need === undefined || isInt(v.need, 1, 7))
+        (v.need === undefined || isInt(v.need, 1, 7)) &&
+        (v.first === undefined || isBool(v.first)) &&
+        (v.yard === undefined || isInt(v.yard, 1, 3))
       )
     case 'start':
       return isMatch(v)

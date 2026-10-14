@@ -55,6 +55,13 @@ export function roundBanner(
   return null
 }
 
+/** What screen readers hear for a round banner: its title and line as one sentence. */
+export function bannerSentence(
+  banner: NonNullable<(typeof ROUND_BANNERS)[number]>
+): string {
+  return `${banner.title}. ${banner.line}`
+}
+
 /** Shows the countdown and round banners over the garden, updated every frame without re-rendering React. */
 export function Countdown({ session }: { session: RoomSession }) {
   const ref = useRef<HTMLParagraphElement>(null)
@@ -72,9 +79,10 @@ export function Countdown({ session }: { session: RoomSession }) {
       if (next !== shownBanner) {
         shownBanner = next
         banner.hidden = next === null
-        const [title, line] = banner.children
+        const [title, line, spoken] = banner.children
         if (title) title.textContent = next?.title ?? ''
         if (line) line.textContent = next?.line ?? ''
+        if (spoken) spoken.textContent = next ? bannerSentence(next) : ''
       }
       const judged =
         phase?.kind === 'reveal' &&
@@ -103,8 +111,14 @@ export function Countdown({ session }: { session: RoomSession }) {
         role="status"
         className="pointer-events-none absolute inset-x-4 top-[calc(50%+3.5rem)] mx-auto max-w-sm animate-pop-in rounded-sketch border-[3px] border-ink bg-paper px-4 py-2 text-center text-ink shadow-[3px_4px_0_rgb(34_34_34/0.3)]"
       >
-        <h2 className="font-marker text-2xl">{''}</h2>
-        <p className="font-hand text-lg leading-snug">{''}</p>
+        {/* Screen readers hear the title and line as one sentence, from the span. */}
+        <h2 aria-hidden className="font-marker text-2xl">
+          {''}
+        </h2>
+        <p aria-hidden className="font-hand text-lg leading-snug">
+          {''}
+        </p>
+        <span className="sr-only">{''}</span>
       </div>
     </>
   )

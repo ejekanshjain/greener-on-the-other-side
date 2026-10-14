@@ -32,7 +32,13 @@ const GREEN_POINTS = 50
 const STRIPE_POINTS = 2.5
 const TIDY_START = 20
 const TIDY_PER_ITEM = 0.5
-const JUNK = { gnome: 1, bin: 4, mower: 4, trampoline: 6 } as const
+/** Junk points each kind costs while it lies on your grass. */
+export const JUNK_POINTS = {
+  gnome: 1,
+  bin: 4,
+  mower: 4,
+  trampoline: 6
+} as const
 /** Rounds in a match and wins that take it. */
 const MATCH_ROUNDS = 3
 const WINS_NEEDED = 2
@@ -62,10 +68,10 @@ export function scoreLawn(lawn: Scorable): Score {
   // `0 -` keeps an empty lawn's Junk at 0 rather than -0.
   const junk =
     0 -
-    (c.gnomes * JUNK.gnome +
-      c.bins * JUNK.bin +
-      c.mowers * JUNK.mower +
-      c.trampolines * JUNK.trampoline)
+    (c.gnomes * JUNK_POINTS.gnome +
+      c.bins * JUNK_POINTS.bin +
+      c.mowers * JUNK_POINTS.mower +
+      c.trampolines * JUNK_POINTS.trampoline)
   return {
     green,
     stripes: stripePoints,

@@ -36,7 +36,8 @@ export const SFX_NAMES = [
   'laugh',
   'stomp',
   'creak',
-  'doorbell'
+  'doorbell',
+  'stripe'
 ] as const
 
 export type SfxName = (typeof SFX_NAMES)[number]
@@ -226,6 +227,11 @@ const RECIPES: Record<SfxName, (v: Voice) => void> = {
   ding(v) {
     tone(v, 'sine', [1760], 0, 0.9, 0.3)
     tone(v, 'sine', [2637], 0, 0.5, 0.1)
+  },
+  stripe(v) {
+    // A soft rising pair of chimes, quieter and shorter than ding.
+    tone(v, 'sine', [1319], 0, 0.3, 0.12)
+    tone(v, 'sine', [1976], 0.08, 0.5, 0.1)
   },
   tick(v) {
     tone(v, 'square', [3200], 0, 0.012, 0.1)

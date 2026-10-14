@@ -265,7 +265,7 @@ function stepEye(dog: Biscuit, yard: Yard, dt: number): void {
   const dropX = Math.min(LAWN_W - 25, Math.max(25, item.lx))
   dog.goalX = dropX - face * MOUTH_DX
   dog.goalY = DROP_LY
-  yard.emit({ type: 'fetch', id: item.id })
+  yard.emit({ type: 'fetch', id: item.id, kind: item.kind })
 }
 
 /** Carries the item to the back row, trampling the first 4 patches he enters on the way. */

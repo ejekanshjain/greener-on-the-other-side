@@ -2,6 +2,7 @@ import { armBlock, armLevel } from '../game/arm'
 import { DOG_LIFT } from '../game/biscuit'
 import {
   digSoon,
+  quietDog,
   dryAll,
   gustSoon,
   setPatch,
@@ -21,6 +22,17 @@ import {
   reportStripes
 } from '../game/report'
 import { scoreLawn } from '../game/score'
+import { GHOST_MS } from '../scenes/ghostFinger'
+import { pointerSpot, tipSpotFor } from '../scenes/tipPointer'
+import {
+  ALL_LINES,
+  FETCH_TIPS,
+  tipInRound,
+  tipKind,
+  TIPS,
+  WIND_TIPS,
+  type TipId
+} from '../game/tips'
 import { isHeavy, type ItemKind } from '../game/types'
 import { LocalTransport } from '../net/localTransport'
 import { isHost, tallyOf } from '../net/room'
@@ -49,9 +61,37 @@ export function devActions(session: RoomSession): DevAction[] {
     { label: 'Fill Bag', run: () => (garden().mower.bag = BAG_CUTS) },
     { label: 'Trigger Dig', run: () => digSoon(garden()) },
     { label: 'Trigger Gust', run: () => gustSoon(garden()) },
-    { label: 'Open Shed', run: () => garden().openShed() }
+    { label: 'Open Shed', run: () => garden().openShed() },
+    {
+      label: 'Pause or Resume',
+      run: () => {
+        const game = window.__game as Partial<Record<string, () => unknown>>
+        if (session.paused) game.resume?.()
+        else game.pause?.()
+      }
+    }
   ]
 }
+
+/** A playtest pause or resume starts this long ahead, so every tab hears of it in time. */
+const PAUSE_LEAD_MS = 150
+
+/** What the dev channel carries between this browser's tabs of one room. */
+/** A fixed tip line's tip, the first round (from 0) it may show in, and whether it's a failure tip. */
+interface TipStage {
+  id: TipId
+  round: number
+  failure: boolean
+}
+
+type DevMessage =
+  | { match: string; at: number }
+  | { pause: 'stop' | 'go'; at: number }
+  | { pause: 'ask' }
+  | {
+      pause: 'state'
+      state: ReturnType<RoomSession['clock']['pauseState']>
+    }
 
 /**
  * Moves a session's match so it started at `at`, as a dev jump. The room state is the
@@ -100,11 +140,48 @@ export function exposeRoomDev(
     }
   }
   const garden = () => session.garden
-  // A dev jump on the host reaches the guest's tab through this channel; tabs of one
-  // browser share it, as `?local` tests do.
+  // A dev jump on the host, or a playtest pause on any page, reaches the other tab
+  // through this channel; tabs of one browser share it, as `?local` tests do.
   const jumps = new BroadcastChannel(`greener-dev-${session.code}`)
-  jumps.onmessage = (event: MessageEvent<{ match: string; at: number }>) =>
-    retime(session, event.data.match, event.data.at)
+  /** This page's sessions: yours, and Mr Pemberton's in Practice. */
+  const sessions = () => {
+    const bot = session.companion
+    return bot instanceof BotNeighbour ? [session, bot.session] : [session]
+  }
+  const pauseHere = (stop: boolean, at: number) => {
+    for (const s of sessions()) {
+      if (stop) s.pauseAt(at)
+      else s.resumeAt(at)
+    }
+  }
+  /** Pauses or resumes every page of the room a moment from now; null where it can't. */
+  const playtestClock = (stop: boolean) => {
+    if (!session.pausable) return null
+    const at = Math.round(session.clock.shared() + PAUSE_LEAD_MS)
+    pauseHere(stop, at)
+    jumps.postMessage({ pause: stop ? 'stop' : 'go', at } satisfies DevMessage)
+    return at
+  }
+  jumps.onmessage = (event: MessageEvent<DevMessage>) => {
+    const data = event.data
+    if ('match' in data) return retime(session, data.match, data.at)
+    if (!session.pausable) return
+    if (data.pause === 'stop' || data.pause === 'go')
+      pauseHere(data.pause === 'stop', data.at)
+    else if (data.pause === 'ask')
+      jumps.postMessage({
+        pause: 'state',
+        state: session.clock.pauseState()
+      } satisfies DevMessage)
+    // A page that loads after a pause takes the room's game time from the others.
+    else if (
+      data.pause === 'state' &&
+      session.clock.heldMs === 0 &&
+      !session.paused
+    )
+      for (const s of sessions()) s.clock.copyPause(data.state)
+  }
+  jumps.postMessage({ pause: 'ask' } satisfies DevMessage)
 
   const api = {
     /** Room phase, role, seats, match and clock. */
@@ -134,7 +211,15 @@ export function exposeRoomDev(
         /** Round verdicts applied this match, round wins (host first), and the waiting final. */
         results: s.results,
         tally: tallyOf(s),
-        pendingFinal: s.pendingFinal && { round: s.pendingFinal.round }
+        pendingFinal: s.pendingFinal && { round: s.pendingFinal.round },
+        /** New-player teaching: this page now, this page for the current match, and the neighbour's flag. */
+        first: {
+          now: session.newPlayerNow(),
+          match: session.firstMatch,
+          peer: s.peer?.first ?? false
+        },
+        /** Whether tips show on this page now. */
+        tipsOn: session.tipsOn
       }
     },
     /** The garden on screen: patch arrays, items, rooted weeds and the hand. */
@@ -195,9 +280,12 @@ export function exposeRoomDev(
         }
       )
     },
-    /** Brenda's reveal: the step on screen, and her lines and the blame lines per lawn. */
+    /**
+     * Brenda's reveal: the step on screen, her lines and the blame lines per lawn, and the
+     * counts beside each score line.
+     */
     reveal() {
-      return { step: reveal.step, ...reveal.lines() }
+      return { step: reveal.step, ...reveal.lines(), counts: reveal.counts() }
     },
     /** Transport, clock and send statistics. */
     net() {
@@ -244,6 +332,11 @@ export function exposeRoomDev(
       return snail ? toClient(snail.lx, snail.ly, ITEM_LIFT.snailShell) : null
     },
     act: {
+      /** Opens the lobby's yard, or closes it as Skip would with `false`. */
+      yard(open = true) {
+        if (open) session.openYard()
+        else session.closeYard()
+      },
       /** Throws a loose item at `speedPx`, `angleDeg` off straight at the fence (positive is right). */
       throw(
         id: number,
@@ -341,6 +434,10 @@ export function exposeRoomDev(
         const g = garden()
         g.biscuit.fetchReadyAt = g.t + inMs
       },
+      /** Biscuit neither eyes, fetches nor sets off for a dig for the rest of the round. */
+      quietDog() {
+        quietDog(garden())
+      },
       /** Removes every loose item lying on the lawn or patio or in Biscuit's mouth. */
       clearItems() {
         const g = garden()
@@ -359,6 +456,10 @@ export function exposeRoomDev(
       pullWeeds(keep = 0) {
         const g = garden()
         g.weeds.splice(Math.max(0, keep))
+      },
+      /** Takes every snail off the lawn at once, with no event. */
+      clearSnails() {
+        garden().snails.length = 0
       },
       /** Sets the arm meter's level now, from 0 to 1. */
       setArm(level: number) {
@@ -379,7 +480,10 @@ export function exposeRoomDev(
           ly: item.ly
         })
         g.command({ type: 'hold', lx: to.lx, ly: to.ly })
-        g.command({ type: 'release', release: { type: 'putDown' } })
+        g.command({
+          type: 'release',
+          release: { type: 'putDown', reason: 'slow' }
+        })
         return true
       },
       /** Takes hold of heavy junk and lifts it, so a real swipe or `throw` can follow. */
@@ -457,6 +561,132 @@ export function exposeRoomDev(
     },
     ready(on = true) {
       session.dispatch({ type: 'ui', action: on ? 'ready' : 'unready' })
+    },
+    /** Presses Show Tips (`true`) or Hide Tips (`false`) in the menu. */
+    tips(on: boolean) {
+      if (on) session.showTips()
+      else session.hideTips()
+    },
+    /** True once tip `id` has shown for 3s this match (this round for a failure tip). */
+    tipSeen(id: TipId) {
+      return session.tipSeen(id)
+    },
+    /**
+     * The tip on show: its words, its spot, its target and, when it has one, where its
+     * arrow's point sits on screen. `ruleSpot` is the spot the tip line's rule picks for
+     * its target now: the patio strip when the target sits behind the line. Null when no
+     * tip shows.
+     */
+    tipNow() {
+      const tip = session.shownTip
+      if (!tip) return null
+      const at = tip.target ? pointerSpot(session.garden, tip.target) : null
+      return {
+        id: tip.id,
+        text: tip.text,
+        spot: tip.spot,
+        ruleSpot: tipSpotFor(session.garden, tip.target ?? undefined),
+        target: tip.target,
+        arrow: at && toClient(at.x - LAWN.x, at.y - LAWN.y)
+      }
+    },
+    /**
+     * The ghost finger on show: its object, the move it shows, whether a press stops it,
+     * how long it has played and where its object (or column's middle) sits on screen, as
+     * `gnome`. Null when none plays.
+     */
+    ghostNow() {
+      const ghost = session.ghost
+      if (!ghost) return null
+      const elapsed = performance.now() - ghost.startAt
+      const g = session.garden
+      const at =
+        ghost.move === 'mow'
+          ? { lx: (ghost.col ?? 0) * 50 + 25, ly: 320 }
+          : (g.item(ghost.id) ?? g.weeds.find(w => w.id === ghost.id))
+      if (elapsed > GHOST_MS || !at) return null
+      return {
+        id: ghost.id,
+        move: ghost.move ?? 'throw',
+        col: ghost.col ?? -1,
+        stoppable: ghost.stoppable,
+        elapsed,
+        gnome: toClient(at.lx, at.ly)
+      }
+    },
+    /**
+     * The lobby's yard: whether it's open, its step (from 0, 3 once all are done), which
+     * steps are done, the step's object or column, failed tries in a row, how the last
+     * visit ended (finished or skipped), whether How to Play covers it, whether this page
+     * has finished or skipped it, the step it sends in `sync`, and the round 1 tips its
+     * finished steps taught.
+     */
+    yard() {
+      const steps = session.yardSteps
+      const hud = session.hud.get()
+      return {
+        open: session.yardOpen,
+        help: hud.yard?.help ?? false,
+        yardDone: hud.yardDone,
+        sends: steps ? Math.min(steps.step + 1, 3) : 0,
+        learned: [...session.yardLearned],
+        step: steps?.step ?? null,
+        done: steps ? [0, 1, 2].map(k => k < steps.step) : null,
+        move: steps?.move ?? null,
+        id: steps?.id ?? 0,
+        pulled: steps?.pulled ?? false,
+        col: steps?.col ?? -1,
+        failures: steps?.failures ?? 0,
+        last: session.yardEnd && { ...session.yardEnd }
+      }
+    },
+    /**
+     * The failure and stripe cues that have shown: their kind, what they're about (an
+     * item, a weed or a column), and `performance.now()` when the scene heard of each
+     * and first drew it.
+     */
+    cues() {
+      return [
+        ...scene.cues.recent.map(c => ({
+          kind: c.kind,
+          id: c.id,
+          heardAt: c.heardAt,
+          shownAt: c.shownAt
+        })),
+        ...scene.stripeCues.recent.map(c => ({
+          kind: c.kind,
+          id: c.col,
+          patches: [...c.patches],
+          heardAt: c.heardAt,
+          shownAt: c.shownAt
+        }))
+      ]
+    },
+    /** The chalk mark under each column on the patio's edge: tick, cross or null. */
+    ticks(): ('tick' | 'cross' | null)[] {
+      return Array.from({ length: 12 }, (_, col) => scene.ticks.mark(col))
+    },
+    /** Every tip and toast line, for the width check. */
+    tipLines(): readonly string[] {
+      return ALL_LINES
+    },
+    /**
+     * Each fixed tip line with its tip, the first round (from 0) it may show in, and
+     * whether it's a failure tip, which shows once a round instead of once a match, for
+     * stage checks. The wind and fetch tips have one tip for several lines.
+     */
+    tipStages(): Record<string, TipStage> {
+      const stage = (id: TipId): TipStage => ({
+        id,
+        round: [0, 1, 2].find(r => tipInRound(id, r)) ?? 0,
+        failure: tipKind(id).failure
+      })
+      const out: Record<string, TipStage> = {}
+      for (const [id, text] of Object.entries(TIPS))
+        out[text] = stage(id as TipId)
+      for (const text of Object.values(WIND_TIPS)) out[text] = stage('wind')
+      for (const text of FETCH_TIPS) out[text] = stage('fetch')
+      return out
     },
     /** Presses Rematch on the match end screen. */
     rematch() {
@@ -575,6 +805,17 @@ export function exposeRoomDev(
         events: (n = 30) => bot.session.log.slice(-n)
       }
     },
+    /**
+     * The playtest clock: whether a pause holds game time still, the ms paused so far,
+     * and game time now. `window.__game.pause()` and `resume()` drive it.
+     */
+    paused() {
+      return {
+        paused: session.paused,
+        heldMs: session.clock.heldMs,
+        now: session.clock.now()
+      }
+    },
     /** Local transport faults at runtime. */
     fault(faults: Partial<Faults>) {
       const net = session.net
@@ -584,9 +825,14 @@ export function exposeRoomDev(
     }
   }
   const unexpose = exposeDev('greener', api)
+  // The playtest clock sits at the top, as `__game.pause()` and `__game.resume()`.
+  const unpause = exposeDev('pause', () => playtestClock(true))
+  const unresume = exposeDev('resume', () => playtestClock(false))
   return () => {
     jumps.close()
     unexpose()
+    unpause()
+    unresume()
   }
 }
 
@@ -600,6 +846,8 @@ function gardenView(g: Garden, round: number) {
     mess: Array.from(g.grid.mess),
     hole: Array.from(g.grid.hole),
     stripes: g.stripes(),
+    /** How far the rooted weed in your hand is pulled, 0 to 1, or -1. */
+    pull: g.pullProgress(),
     blame: { ...g.blame },
     arm: {
       level: armLevel(g.arm, g.t),

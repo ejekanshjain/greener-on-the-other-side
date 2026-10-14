@@ -54,7 +54,8 @@ describe('final pack', () => {
         patch: i % PATCHES,
         kind: 'litter' as const,
         look: 3,
-        sunk: true
+        sunk: true,
+        theirs: true
       }))
     }
     const pack = encodeFinal(worst)

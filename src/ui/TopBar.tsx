@@ -77,7 +77,8 @@ export function TopBar({
             />
           </svg>
         </button>
-        <NameTag name={shortName(view.meName)} testId="my-name">
+        {/* Your own tag reads You, as your lobby gate does: a funny name is easy to miss. */}
+        <NameTag name="You" testId="my-name">
           <Rosettes
             wins={mine}
             label={winsLabel('You', mine)}
@@ -169,8 +170,8 @@ function useShownTally(
 }
 
 /**
- * The round clock. It updates every frame without re-rendering React, and turns red for
- * the last 10s of play.
+ * The round clock. It updates every frame without re-rendering React, shows the round's
+ * full time through every countdown, and turns red for the last 10s of play.
  */
 function RoundClock({
   session,
@@ -188,13 +189,16 @@ function RoundClock({
       frame = requestAnimationFrame(tick)
       const phase = session.phase()
       const late = phase?.kind === 'play' && phase.msLeft <= LAST_TICKS_MS
+      // Every countdown shows the coming round's full time; the reveal shows 0:00.
       const text = !phase
         ? ''
-        : phase.kind === 'play'
-          ? formatClock(phase.msLeft)
-          : phase.kind === 'countdown' && phase.round === 0
-            ? formatClock(roundMs)
-            : '0:00'
+        : session.paused
+          ? COPY.paused
+          : phase.kind === 'play'
+            ? formatClock(phase.msLeft)
+            : phase.kind === 'countdown'
+              ? formatClock(roundMs)
+              : '0:00'
       if (text === shown) return
       shown = text
       el.textContent = text

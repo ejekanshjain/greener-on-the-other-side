@@ -200,26 +200,70 @@ export interface Landing {
   at: number
 }
 
+/** Why a release put an item down instead of throwing it. */
+export type PutDownReason = 'slow' | 'angle' | 'still' | 'bag' | 'cancel'
+
 /** Things the garden tells the scene and the session about. */
 export type GardenEvent =
-  | { type: 'yank'; id: number }
+  /** You pulled a rooted weed out of (lx, ly); it's loose item `id` now. */
+  | { type: 'yank'; id: number; lx: number; ly: number }
   /** You grabbed a crawling snail, and it hid in its shell. */
   | { type: 'shell'; id: number }
   /** You threw an item: its swipe speed and how far it flies along the ground, wind and arm included. */
   | { type: 'throw'; id: number; speedPx: number; distance: number }
-  | { type: 'putDown'; id: number }
-  /** A throw that couldn't go: the hand needs 0.4s, or the arm meter is full. */
-  | { type: 'tired'; id: number; reason: 'hand' | 'tired' }
+  /**
+   * You let go without throwing: too slow, aimed off the fence, held still, the bag off
+   * the compost, or a press the browser cancelled.
+   */
+  | { type: 'putDown'; id: number; reason: PutDownReason }
+  /**
+   * A throw that couldn't go: the hand needs 0.4s, or the arm meter is full. The item
+   * dropped at (lx, ly).
+   */
+  | {
+      type: 'tired'
+      id: number
+      reason: 'hand' | 'tired'
+      lx: number
+      ly: number
+    }
+  /** You let go of weed `id` before pulling it out, so it stays rooted at (lx, ly). */
+  | { type: 'rooted'; id: number; lx: number; ly: number }
+  /**
+   * A fast flick on grass grabbed nothing. It started at (lx, ly) and headed along
+   * (dirX, dirY). `near` is the thing within 88 px of the press when the flick aimed
+   * within 60 degrees of the fence, or null.
+   */
+  | {
+      type: 'miss'
+      lx: number
+      ly: number
+      dirX: number
+      dirY: number
+      near: HitTarget | null
+    }
   /** You caught something falling over the fence. */
   | { type: 'catch'; id: number }
-  | { type: 'cross'; crossing: Crossing; flight: Flight }
-  | { type: 'clip'; clip: ClipRecord }
-  | { type: 'land'; landing: Landing; fromNeighbour: boolean }
-  /** A throw arrived from the neighbour, entering at ground point (x, ly) and height h. */
-  | { type: 'arrive'; kind: ItemKind; x: number; ly: number; h: number }
+  /** Your throw, item `id`, crossed the fence and left your garden. */
+  | { type: 'cross'; id: number; crossing: Crossing; flight: Flight }
+  /** Your throw `id` clipped the fence and teeters on top. */
+  | { type: 'clip'; id: number; clip: ClipRecord }
+  /** Item `id` landed on your lawn. */
+  | { type: 'land'; id: number; landing: Landing; fromNeighbour: boolean }
+  /** Throw `id` arrived from the neighbour, entering at ground point (x, ly) and height h. */
+  | {
+      type: 'arrive'
+      id: number
+      kind: ItemKind
+      x: number
+      ly: number
+      h: number
+    }
   | { type: 'dry'; patch: number; health: number }
   | { type: 'tap'; on: boolean }
   | { type: 'pourStart'; patch: number }
+  /** You stopped pouring. */
+  | { type: 'pourStop' }
   | { type: 'sparkle'; patch: number }
   | { type: 'drown'; patch: number }
   | { type: 'flood'; patches: number[] }
@@ -239,8 +283,19 @@ export type GardenEvent =
   /** The bag went back on the mower without emptying. */
   | { type: 'bagBack' }
   | { type: 'shaggy'; col: number }
-  | { type: 'sprout'; patch: number; spread: boolean }
-  | { type: 'snail'; row: number; dir: 1 | -1 }
+  /**
+   * A new weed came up at (lx, ly) on `patch`: on its schedule, or spread from another
+   * weed or rooted from a seed when `spread`.
+   */
+  | {
+      type: 'sprout'
+      id: number
+      patch: number
+      spread: boolean
+      lx: number
+      ly: number
+    }
+  | { type: 'snail'; id: number; row: number; dir: 1 | -1 }
   | { type: 'wilt'; patch: number }
   /** Biscuit started circling a patch; a tap in the next 2s stops the dig. */
   | { type: 'circle'; patch: number }
@@ -250,8 +305,8 @@ export type GardenEvent =
   | { type: 'dig'; patch: number }
   /** Biscuit barked at an item he's about to fetch. */
   | { type: 'bark'; id: number }
-  /** Biscuit picked an item up in his mouth. */
-  | { type: 'fetch'; id: number }
+  /** Biscuit picked item `id`, of `kind`, up in his mouth. */
+  | { type: 'fetch'; id: number; kind: ItemKind }
   /** Biscuit dropped the item he carried, on `patch` (-1 off the lawn). */
   | { type: 'drop'; id: number; patch: number }
   /** You took the item back out of Biscuit's mouth. */
@@ -266,7 +321,7 @@ export type GardenEvent =
   /** A gust dies down. */
   | { type: 'calm' }
   /** A rooted dandelion turned into a seed clock. */
-  | { type: 'clock'; patch: number }
+  | { type: 'clock'; id: number; patch: number }
   /** A seed clock burst at `patch`: its seeds land nearby, or blow over the fence when `over`. */
   | { type: 'burst'; patch: number; over: boolean }
   /** The shed banged open: the crate's gnomes fly out and the heavy junk rolls onto the patio. */
@@ -275,17 +330,32 @@ export type GardenEvent =
   | { type: 'grip'; id: number; patio: boolean }
   /** You held heavy junk still long enough to lift it. */
   | { type: 'lift'; id: number }
-  /** You let go of heavy junk without throwing it. */
-  | { type: 'setDown'; id: number }
+  /** You let go of heavy junk without throwing it; `fast` when a drag ended in a swipe. */
+  | { type: 'setDown'; id: number; fast: boolean }
   /** Dragging heavy junk flattened a patch. */
   | { type: 'flatten'; patch: number }
   /** Heavy junk landed and sank in at `patch`. */
-  | { type: 'sink'; kind: ItemKind; patch: number; fromNeighbour: boolean }
+  | {
+      type: 'sink'
+      id: number
+      kind: ItemKind
+      patch: number
+      fromNeighbour: boolean
+    }
   /** A thrown mower scalped a patch on its crooked run. */
   | { type: 'run'; patch: number }
   /** Something bounced off a trampoline at `patch`; `own` when it was your throw. */
   | { type: 'bounce'; patch: number; own: boolean }
+  /** A mowing press ended. */
+  | { type: 'mowEnd' }
+  /** The yard put item `id` back at (lx, ly), where its step began. */
+  | { type: 'putBack'; id: number; lx: number; ly: number }
   /** You tried to mow after throwing your mower. */
   | { type: 'noMower' }
   /** You pressed the parked mower before the finale. */
   | { type: 'mowerPoke' }
+  /**
+   * A mowing press cut 12 or more of column `col`'s 16 patches and it still doesn't
+   * stripe: `patches` are the ones that block it.
+   */
+  | { type: 'blocked'; col: number; patches: number[] }

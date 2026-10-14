@@ -11,6 +11,7 @@ import {
   COLS,
   FENCE_MARGIN,
   HEALTH_MAX,
+  HEAP_CUTS,
   HEAVY_DISTANCE,
   LAWN_D,
   LAWN_W,
@@ -18,13 +19,15 @@ import {
   PATCH_W,
   PATCHES,
   POUR_STEP_MS,
+  ROUND_MS,
   ROWS,
+  STRIPE_MIN,
   THROW_MAX_PX,
   THROW_UNITS_PER_PX
 } from './tuning'
 import { pourPatches } from './water'
 import { windPower } from './wind'
-import { isHeavy, type GardenEvent, type Item } from './types'
+import { isHeavy, Mess, type GardenEvent, type Item } from './types'
 
 /** Hand time per action in ms (PLAN.md 2.9). The bot can't start another until it's up. */
 export const HAND_TIME = {
@@ -172,7 +175,8 @@ export class Brain {
   /**
    * Picks the next action, most urgent first: Biscuit, the tap, catches, the finale, weeds,
    * snails, watering and mowing, then throw-backs with the time left over. Mr Pemberton
-   * throws back before any of his chores.
+   * throws back before any of his chores. A closing plan's last stretch keeps Biscuit and
+   * the tap, skips catches and chores, and mows for stripes before any throw.
    */
   private next(g: Garden): void {
     const p = this.profile
@@ -184,13 +188,16 @@ export class Brain {
       ])
     }
     if (this.tapStep(g)) return
-    if (this.catchStep(g)) return
+    const closing = this.closing(g)
+    if (!closing && this.catchStep(g)) return
     const armFree = armBlock(g.arm, g.t + 200) === null
     this.noteArrivals(g)
     // A neighbour busy carrying his crate gnomes home has no hand free to throw back.
     const carrying = g.shedOpen && p.finale.gnomes === 'carry'
     const sendDue = g.t >= this.nextSendAt
+    if (g.shedOpen && this.lateMowerStep(g)) return
     if (p.spiteFirst && armFree && !carrying && this.returnStep(g)) return
+    if (closing) return this.closingMove(g, armFree)
     if (g.shedOpen && this.finaleStep(g, armFree)) return
     const canThrow = armFree && !this.savingArm(g)
     if (this.weedStep(g, canThrow, sendDue)) return
@@ -213,7 +220,52 @@ export class Brain {
         ? p.mowEveryMs / 2
         : p.mowEveryMs
     this.nextMowAt = g.t + every
-    this.mow(g)
+    this.mow(g, this.longestColumn(g), 'upkeep')
+    return true
+  }
+
+  /** True in a closing plan's last stretch, which scales with the round like the shed. */
+  private closing(g: Garden): boolean {
+    const ms = this.profile.finale.closeMs
+    return ms > 0 && g.shedOpen && g.t >= g.endMs - ms * (g.roundMs / ROUND_MS)
+  }
+
+  /**
+   * A move in a closing plan's last stretch: columns one pass would stripe get mown back
+   * to back, and with none left it throws gnomes, then throws back or waters.
+   */
+  private closingMove(g: Garden, armFree: boolean): void {
+    if (this.closeStep(g)) return
+    if (this.finaleStep(g, armFree)) return
+    if (armFree && this.returnStep(g)) return
+    this.waterStep(g)
+  }
+
+  /**
+   * One mow of the last stretch: mows the unstriped column one pass would stripe, after
+   * emptying the bag if that column's cuts would overfill it. False with nothing to mow.
+   */
+  private closeStep(g: Garden): boolean {
+    if (g.mowerGone || g.t > g.endMs - HAND_TIME.mow) return false
+    const col = closingColumn(g)
+    if (col < 0) return false
+    if (g.mower.bag + bagCuts(g, col) > BAG_CUTS) {
+      if (!g.bagHit(BAG_POS.lx, BAG_POS.ly, 1)) return false
+      this.compost(g)
+      return true
+    }
+    this.mow(g, col, 'finale')
+    return true
+  }
+
+  /** Throws a kept mower over in the round's last seconds, when the plan says so. */
+  private lateMowerStep(g: Garden): boolean {
+    const plan = this.profile.finale.mower
+    if (typeof plan !== 'object' || g.t < g.endMs - plan.leftMs) return false
+    const mower = g.mowerGone ? undefined : g.item(g.mowerId)
+    if (!mower || !lying(mower) || !this.junkReady(g)) return false
+    if (armBlock(g.arm, g.t + HEAVY_THROW_AT) !== null) return false
+    this.heavy(g, mower)
     return true
   }
 
@@ -296,11 +348,16 @@ export class Brain {
     return true
   }
 
-  /** Heavy junk it means to throw, lying where a hand can grab it. */
+  /** Heavy junk it means to throw with the rest, lying where a hand can grab it. */
   private junk(g: Garden): Item | undefined {
-    if (!this.profile.finale.junk) return undefined
+    const plan = this.profile.finale
+    if (!plan.junk) return undefined
     return g.items.find(
-      i => isHeavy(i.kind) && lying(i) && !this.returns.has(i.id)
+      i =>
+        isHeavy(i.kind) &&
+        lying(i) &&
+        !this.returns.has(i.id) &&
+        (i.kind !== 'mower' || plan.mower === 'junk')
     )
   }
 
@@ -393,7 +450,10 @@ export class Brain {
             })
           else {
             if (held) this.kept.add(held.id)
-            h.command({ type: 'release', release: { type: 'putDown' } })
+            h.command({
+              type: 'release',
+              release: { type: 'putDown', reason: 'slow' }
+            })
           }
         }
       ]
@@ -496,8 +556,8 @@ export class Brain {
     return true
   }
 
-  /** Mows the column with the longest grass, top to bottom at a safe speed. */
-  private mow(g: Garden): void {
+  /** The column with the longest grass, for a routine mow. */
+  private longestColumn(g: Garden): number {
     let col = this.mowCol
     let longest = -1
     for (let c = 0; c < COLS; c++) {
@@ -510,6 +570,11 @@ export class Brain {
       }
     }
     this.mowCol = (col + 1) % COLS
+    return col
+  }
+
+  /** Mows column `col` fence to patio at a safe speed. */
+  private mow(g: Garden, col: number, share: keyof Shares): void {
     const lx = col * PATCH_W + PATCH_W / 2
     const steps: [number, (h: Garden) => void][] = []
     for (let row = 0; row < ROWS; row++) {
@@ -520,7 +585,7 @@ export class Brain {
       ])
     }
     steps.push([ROWS * 70, h => h.command({ type: 'mowEnd' })])
-    this.act(g, HAND_TIME.mow, 'upkeep', steps)
+    this.act(g, HAND_TIME.mow, share, steps)
   }
 
   /** Carries the bag onto the compost bin and holds it there until it empties. */
@@ -528,7 +593,14 @@ export class Brain {
     this.act(g, HAND_TIME.compost, 'upkeep', [
       [0, h => h.command({ type: 'grabBag', lx: BAG_POS.lx, ly: BAG_POS.ly })],
       [150, h => h.command({ type: 'hold', ...COMPOST_SPOT })],
-      [1900, h => h.command({ type: 'release', release: { type: 'putDown' } })]
+      [
+        1900,
+        h =>
+          h.command({
+            type: 'release',
+            release: { type: 'putDown', reason: 'slow' }
+          })
+      ]
     ])
   }
 
@@ -578,7 +650,14 @@ export class Brain {
         150,
         h => h.command({ type: 'hold', lx: item.lx, ly: item.ly + CARRY_STEP })
       ],
-      [300, h => h.command({ type: 'release', release: { type: 'putDown' } })]
+      [
+        300,
+        h =>
+          h.command({
+            type: 'release',
+            release: { type: 'putDown', reason: 'slow' }
+          })
+      ]
     ])
   }
 
@@ -600,7 +679,14 @@ export class Brain {
       [0, grabAt],
       [100, h => h.command({ type: 'hold', lx: item.lx, ly: item.ly - 30 })],
       [400, h => h.command({ type: 'hold', lx, ly: this.heavyDragLy() })],
-      [700, h => h.command({ type: 'release', release: { type: 'putDown' } })],
+      [
+        700,
+        h =>
+          h.command({
+            type: 'release',
+            release: { type: 'putDown', reason: 'slow' }
+          })
+      ],
       [900, grabAt],
       [1600, h => h.command({ type: 'lift' })],
       [
@@ -652,4 +738,30 @@ export class Brain {
 /** True for an item lying still or sliding, so a hand can pick it up. */
 function lying(item: Item): boolean {
   return item.state === 'rest' || item.state === 'slide'
+}
+
+/**
+ * The unstriped column one mowing pass would stripe, with the fewest patches a pass can't
+ * clear, so a landing later is least likely to break it; -1 when none would.
+ */
+export function closingColumn(g: Garden): number {
+  const striped = g.stripes()
+  const stuck = g.stuckByColumn()
+  let best = -1
+  for (let c = 0; c < COLS; c++) {
+    const n = stuck[c] as number
+    if ((striped >> c) & 1 || n > ROWS - STRIPE_MIN) continue
+    if (best < 0 || n < (stuck[best] as number)) best = c
+  }
+  return best
+}
+
+/** The cuts one pass down column `col` puts in the bag: 1 a patch with length, 6 a heap. */
+function bagCuts(g: Garden, col: number): number {
+  let cuts = 0
+  for (let i = col; i < PATCHES; i += COLS) {
+    if ((g.grid.length[i] as number) > 0) cuts++
+    if (g.grid.mess[i] === Mess.heap) cuts += HEAP_CUTS
+  }
+  return cuts
 }

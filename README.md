@@ -32,4 +32,6 @@ These work in dev builds only:
 - `?local`: connect two tabs of one browser instead of using Pusher.
 - `?fast`: shorten rounds and waits.
 - `?debug`: show network stats and other overlays.
+- `?first=1` or `?first=0`: make this tab a new player, with tips, or a returning one. Two `?local` tabs share storage, so this is how each can differ.
 - The backquote key opens the dev panel.
+- `window.__game.pause()` and `window.__game.resume()` in the console: stop and restart game time in a `?local` room or Practice, for playtests.

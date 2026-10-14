@@ -123,6 +123,11 @@ export class NeighbourView {
     }
   }
 
+  /** A puff in the peek strip's front row at `x`, where your yard throw left over the fence. */
+  vanish(x: number, kind: ItemKind, at: number): void {
+    push(this.puffs, { x, row: 0, kind, at })
+  }
+
   /** Forgets everything, for a new round. */
   clear(): void {
     this.clips.length = 0

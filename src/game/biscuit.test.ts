@@ -176,7 +176,10 @@ describe('Biscuit fetches', () => {
     expect(first(log, 'takeBack').event.id).toBe(item.id)
     expect(item.state).toBe('held')
     expect(garden.biscuit.state).toBe('idle')
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     // The pickup started his cooldown, so he leaves it alone for 20s.
     run(garden, garden.t + 6000, log)
     expect(log.filter(e => e.event.type === 'fetch')).toHaveLength(1)

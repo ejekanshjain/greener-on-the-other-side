@@ -17,9 +17,12 @@ import {
   isHost,
   lastRound,
   matchPhase,
+  decidedMatchEnd,
   peerHere,
+  peerYard,
   roomStep,
   SEAT_FREE_MS,
+  syncMsg,
   tallyOf,
   type RoomEnv,
   type RoomInput,
@@ -32,7 +35,9 @@ const env: RoomEnv = {
   fast: false,
   peerLawn: () => null,
   peerFinal: () => null,
-  myFinal: () => null
+  myFinal: () => null,
+  newPlayer: () => false,
+  yardStep: () => 0
 }
 
 /** A player whose reducer runs over a fake room where every message reaches everyone. */
@@ -511,6 +516,24 @@ describe('match end, rematch and leave', () => {
     expect(a.state.match?.seed).not.toBe(first?.seed)
   })
 
+  it('hands the rematch to a guest that lost its start and every sync before play', () => {
+    const { room, a, b } = finishedMatch()
+    const first = a.state.match?.id
+    a.env = { ...env, newMatchId: () => 'mtch02' }
+    room.lose = msg =>
+      msg.k === 'start' || (msg.k === 'sync' && msg.phase === 'match')
+    b.input({ type: 'ui', action: 'rematch' }, room.now)
+    a.input({ type: 'ui', action: 'rematch' }, room.now)
+    room.advance(6000)
+    expect(matchPhase(a.state, room.now)?.kind).toBe('play')
+    expect(b.state.phase).toBe('over')
+    expect(b.state.match?.id).toBe(first)
+    room.lose = () => false
+    room.advance(2500)
+    expect(b.state.match).toEqual(a.state.match)
+    expect(matchPhase(b.state, room.now)?.kind).toBe('play')
+  })
+
   it('shows a neighbour who reloads at the match end the result, and Ready counts as Rematch', () => {
     const { room, a, b } = finishedMatch()
     room.drop(b)
@@ -844,5 +867,141 @@ describe('presence, walkovers and no contests', () => {
       winner: a.id,
       summary: { tally: [2, 0] }
     })
+  })
+})
+
+describe('the finished-match fact', () => {
+  it('counts a match Brenda decided, on both pages and on one that rejoins its end', () => {
+    const { room, a, b } = finishedMatch()
+    expect(decidedMatchEnd(a.state)).toBe(true)
+    expect(decidedMatchEnd(b.state)).toBe(true)
+    room.drop(b)
+    const b2 = room.join('bbbbbbbb')
+    expect(decidedMatchEnd(b2.state)).toBe(true)
+  })
+
+  it('never counts a storm-off, a walkover, a no contest or a leave mid-reveal', () => {
+    const storm = inMatch()
+    storm.b.input({ type: 'ui', action: 'leave' }, storm.room.now)
+    storm.room.flush()
+    expect(decidedMatchEnd(storm.a.state)).toBe(false)
+    expect(decidedMatchEnd(storm.b.state)).toBe(false)
+
+    const gone = inPlay()
+    gone.room.drop(gone.b)
+    gone.room.advance(GONE_MS + 1000)
+    expect(gone.a.state.over?.reason).toBe('walkover')
+    expect(decidedMatchEnd(gone.a.state)).toBe(false)
+    expect(decidedMatchEnd(gone.room.join('bbbbbbbb').state)).toBe(false)
+
+    const dead = inPlay()
+    dead.room.quiet.add(dead.a.id)
+    dead.room.lose = msg => msg.k !== 'sync'
+    dead.room.advance(DEAD_MS + 500)
+    expect(dead.b.state.over?.reason).toBe('noContest')
+    expect(decidedMatchEnd(dead.b.state)).toBe(false)
+
+    // The loser leaves during the last reveal: only the page that saw it end counts it.
+    const late = inMatch()
+    late.a.env = late.b.env = countingEnv()
+    for (const round of [0, 1]) {
+      late.a.input(
+        { type: 'final', round, pack: finalOf(4, round) },
+        late.room.now
+      )
+      late.b.input(
+        { type: 'final', round, pack: finalOf(4, round, 2) },
+        late.room.now
+      )
+      late.room.flush()
+    }
+    late.b.input({ type: 'ui', action: 'leave' }, late.room.now)
+    late.room.flush()
+    expect(decidedMatchEnd(late.b.state)).toBe(false)
+    late.room.drop(late.b)
+    late.room.advance(500_000)
+    expect(decidedMatchEnd(late.a.state)).toBe(true)
+  })
+
+  it("puts a new player's flag in its lobby sync, read live, and never during play", () => {
+    const room = new Room()
+    const a = room.join('aaaaaaaa')
+    const b = room.join('bbbbbbbb')
+    let fresh = true
+    b.env = { ...env, newPlayer: () => fresh }
+    b.input({ type: 'ui', action: 'ready' }, room.now)
+    room.flush()
+    expect(a.state.peer?.first).toBe(true)
+    expect(b.state.peer?.first).toBe(false)
+    a.input({ type: 'ui', action: 'ready' }, room.now)
+    room.flush()
+    expect(b.state.phase).toBe('match')
+    expect(syncMsg(b.state, room.now, b.env)).not.toHaveProperty('first')
+    expect(a.state.peer?.first).toBe(false)
+    fresh = false
+    expect(
+      syncMsg({ ...b.state, phase: 'lobby' }, room.now, b.env)
+    ).not.toHaveProperty('first')
+  })
+
+  it('sends the yard step in a lobby sync and shows it until the neighbour is Ready', () => {
+    const room = new Room()
+    const a = room.join('aaaaaaaa')
+    const b = room.join('bbbbbbbb')
+    let step = 1
+    b.env = { ...env, yardStep: () => step }
+    a.input({ type: 'ui', action: 'ready' }, room.now)
+    room.advance(2000)
+    expect(peerYard(a.state)).toBe(1)
+    expect(a.state.peer?.yard).toBe(1)
+    step = 2
+    a.effects.length = 0
+    room.advance(2000)
+    expect(peerYard(a.state)).toBe(2)
+    // Each new step is spoken once, and a repeat of the same step says nothing.
+    room.advance(2000)
+    expect(a.effects.filter(e => e === 'announce')).toHaveLength(1)
+    // Ready takes over the friend's status line, though the yard stays open.
+    b.input({ type: 'ui', action: 'ready' }, room.now)
+    room.flush()
+    expect(b.state.phase).toBe('match')
+    expect(peerYard(a.state)).toBe(0)
+    expect(syncMsg(b.state, room.now, b.env)).not.toHaveProperty('yard')
+  })
+
+  it('sends a sync at once when the yard step changes in the lobby, and not in a match', () => {
+    const room = new Room()
+    const a = room.join('aaaaaaaa')
+    const b = room.join('bbbbbbbb')
+    room.flush()
+    b.env = { ...env, yardStep: () => 2 }
+    b.input({ type: 'ui', action: 'yard' }, room.now)
+    room.flush()
+    expect(peerYard(a.state)).toBe(2)
+    b.input({ type: 'ui', action: 'ready' }, room.now)
+    a.input({ type: 'ui', action: 'ready' }, room.now)
+    room.flush()
+    expect(b.state.phase).toBe('match')
+    b.outbox.length = 0
+    b.input({ type: 'ui', action: 'yard' }, room.now)
+    expect(b.outbox).toHaveLength(0)
+  })
+
+  it('gives no yard line once the neighbour presses Ready in the yard', () => {
+    const room = new Room()
+    const a = room.join('aaaaaaaa')
+    const b = room.join('bbbbbbbb')
+    b.env = { ...env, yardStep: () => 3 }
+    b.input({ type: 'ui', action: 'ready' }, room.now)
+    room.flush()
+    expect(a.state.peer?.yard).toBe(3)
+    expect(a.state.peer?.ready).toBe(true)
+    expect(peerYard(a.state)).toBe(0)
+    b.input({ type: 'ui', action: 'unready' }, room.now)
+    room.flush()
+    expect(peerYard(a.state)).toBe(3)
+    b.env = env
+    room.advance(2000)
+    expect(peerYard(a.state)).toBe(0)
   })
 })

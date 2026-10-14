@@ -6,6 +6,8 @@
 import {
   BASE,
   dev,
+  frames,
+  hold,
   launch,
   mouseFlick,
   roomCode,
@@ -26,7 +28,7 @@ async function seededPair(browser, size, seed) {
   const b = await context.newPage()
   const ea = watchErrors(a, 'A')
   const eb = watchErrors(b, 'B')
-  await a.goto(`${BASE}/r/${code}?local&seed=${seed}&pid=aaaaaaaa88`)
+  await a.goto(`${BASE}/r/${code}?local&seed=${seed}&pid=aaaaaaaa88&first=1`)
   await waitFor(a, s => s.admission === 'seated')
   await b.goto(`${BASE}/r/${code}?local&pid=zzzzzzzz88`)
   await waitFor(a, s => s.seats.length === 2)
@@ -64,7 +66,7 @@ async function sameSpawns(browser, size) {
   const notes = (await dev(a, g => g.events(60)))
     .filter(e => e.type === 'note')
     .map(e => e.detail.text)
-  if (!notes.includes('Pull the weed out, then flick it at the fence.'))
+  if (!notes.includes('Drag the weed out first, then swipe it up.'))
     throw new Error(`${size}: no weed tip: ${notes}`)
 
   // Jump both to 40s in and compare.
@@ -111,6 +113,14 @@ async function wiltAndShell(browser, size) {
   const { a, b, check, context } = await seededPair(browser, size, 777)
   const scale = await dev(a, g => g.toClient(1, 0).x - g.toClient(0, 0).x)
 
+  // A real tap on the patio unlocks sound first, as a player's Ready click would. The
+  // unlock can stall the page's frames, and a mouse flick timed from outside the page
+  // would then read as slow.
+  const patio = await dev(a, g => g.toClient(560, 720))
+  await hold(a, patio, 60, touch)
+  await sleep(200)
+  await frames(a, 10)
+
   // A yanked weed thrown over wilts on the other lawn 20s after the yank.
   await dev(a, g => g.act.sprout(8 * 12 + 6))
   await sleep(200)
@@ -128,7 +138,12 @@ async function wiltAndShell(browser, size) {
     )
     if (!landed) await sleep(100)
   }
-  if (!landed) throw new Error(`${size}: the thrown weed never landed`)
+  if (!landed) {
+    const ev = (await dev(a, g => g.events(40))).map(
+      e => `${e.type} ${JSON.stringify(e.detail)?.slice(0, 90)}`
+    )
+    throw new Error(`${size}: the thrown weed never landed\n${ev.join('\n')}`)
+  }
   await shot(b, `pests-${size}-landed`)
 
   // A snail grabbed with a real press goes over as a shell and comes out 3s after landing.

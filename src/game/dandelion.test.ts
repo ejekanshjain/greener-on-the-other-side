@@ -95,7 +95,10 @@ describe('seed clocks', () => {
   it('burst into 3 seeds around them when put down, and each roots 10s later', () => {
     const { garden, clock } = gardenWithClock()
     yank(garden, clock)
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     const log = run(garden, garden.t + TICK_MS * 2)
     const burst = log.find(e => e.event.type === 'burst')
     if (burst?.event.type !== 'burst') throw new Error('no burst')
@@ -149,7 +152,10 @@ describe('seed clocks', () => {
     while (!gustSoon(garden, 'over', 1)) run(garden, garden.t + 500)
     run(garden, garden.t + 2100)
     expect(garden.wind.over).toBe(1)
-    garden.command({ type: 'release', release: { type: 'putDown' } })
+    garden.command({
+      type: 'release',
+      release: { type: 'putDown', reason: 'slow' }
+    })
     const log = run(garden, garden.t + 3000)
     const burst = log.find(e => e.event.type === 'burst')
     expect(burst?.event).toEqual(expect.objectContaining({ over: true }))

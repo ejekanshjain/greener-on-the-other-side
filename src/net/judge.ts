@@ -1,3 +1,10 @@
+import {
+  countedFromWire,
+  countedToWire,
+  countLawn,
+  zeroCounts,
+  type Counted
+} from '../game/counts'
 import type { Blame } from '../game/garden'
 import { noBlame, noCounts, packPatch, Top, type Counts } from '../game/report'
 import {
@@ -27,6 +34,8 @@ export interface RoundResult {
   /** Round wins and points so far, host first. */
   tally: [number, number]
   totals: [number, number]
+  /** What Brenda counted on each lawn, host first, for the reveal and the coach tip. */
+  counts: [Counted, Counted]
   /** The own fault Brenda names under the loser's score, if any. */
   blame: keyof Blame | null
   /** True when this round decided the match. */
@@ -73,6 +82,7 @@ export function judgeRound(
   const decoded = guestFinal ? decodeFinal(guestFinal) : null
   const guest = decoded?.round === round ? decoded : freshLawn()
   const scores: [Score, Score] = [scoreLawn(host), scoreLawn(guest)]
+  const counts: [Counted, Counted] = [countLawn(host), countLawn(guest)]
   const winner = roundWinner(
     scores[0],
     scores[1],
@@ -97,6 +107,7 @@ export function judgeRound(
     winner,
     tally,
     totals,
+    counts,
     blame,
     over: matchResult(tally, totals, round + 1).over,
     hostFinal,
@@ -121,6 +132,7 @@ export function resultMsg(r: RoundResult): Extract<Msg, { k: 'result' }> {
     w: r.winner,
     tally: r.tally,
     totals: r.totals,
+    ct: [countedToWire(r.counts[0]), countedToWire(r.counts[1])],
     bl: r.blame ?? '',
     over: r.over,
     hf: r.hostFinal,
@@ -128,14 +140,19 @@ export function resultMsg(r: RoundResult): Extract<Msg, { k: 'result' }> {
   }
 }
 
-/** A round's verdict from the host's `result` message. */
+/**
+ * A round's verdict from the host's `result` message. The validator has checked its
+ * counts, so they always read.
+ */
 export function resultFrom(msg: Extract<Msg, { k: 'result' }>): RoundResult {
+  const counts = (i: 0 | 1) => countedFromWire(msg.ct[i]) ?? zeroCounts()
   return {
     round: msg.round,
     scores: [fromLines(msg.sc[0]), fromLines(msg.sc[1])],
     winner: msg.w,
     tally: [msg.tally[0], msg.tally[1]],
     totals: [msg.totals[0], msg.totals[1]],
+    counts: [counts(0), counts(1)],
     blame: msg.bl === '' ? null : msg.bl,
     over: msg.over,
     hostFinal: msg.hf,

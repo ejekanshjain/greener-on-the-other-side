@@ -7,6 +7,7 @@ import { WORST_LABELS, WorstWindow } from './worst'
 
 const land = (patch: number, fromNeighbour = false): GardenEvent => ({
   type: 'land',
+  id: 1,
   landing: { patch, kind: 'gnome', at: 0 },
   fromNeighbour
 })
@@ -16,7 +17,11 @@ describe('the worst moment', () => {
     const g = new Garden({ seed: 1, calm: true })
     const w = new WorstWindow()
     w.step(g, [], 0)
-    w.step(g, [{ type: 'clip', clip: { kind: 'gnome', x: 200, at: 0 } }], 100)
+    w.step(
+      g,
+      [{ type: 'clip', id: 1, clip: { kind: 'gnome', x: 200, at: 0 } }],
+      100
+    )
     setPatch(g, 10, { health: 3 })
     w.step(g, [land(10)], 700)
     expect(w.loss).toBe(2)

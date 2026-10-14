@@ -57,7 +57,8 @@ export function readPack(pack: string): TrueLawn | null {
     markers: lawn.markers.map(m => ({
       ...m,
       look: 0,
-      sunk: isHeavy(m.kind)
+      sunk: isHeavy(m.kind),
+      theirs: false
     })),
     counts: lawn.counts,
     healthSum: health,

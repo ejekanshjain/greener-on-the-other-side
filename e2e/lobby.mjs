@@ -5,6 +5,10 @@
 // Again, and Play Here, at all three sizes. Screen readers get the room code letter by
 // letter, a neighbour who goes quiet shows Away on their gate, and a third tab sees Room
 // Full without sending a single message.
+// M28: What Brenda Counts on every path, How to Play by click and keyboard with its status
+// line, the pinned buttons on short phones, and focus on the menu button at the countdown.
+// M41: How to Play's 13 lines, and its "More below" cue in the lobby and the menu while
+// the last line sits out of view, gone once it shows. Pass `more` to run only that.
 import {
   BASE,
   dev,
@@ -12,6 +16,7 @@ import {
   localPair,
   roomCode,
   shot,
+  SHOTS,
   SIZES,
   sleep,
   waitFor,
@@ -42,6 +47,69 @@ async function readyNode(page) {
   )
 }
 
+/** Checks What Brenda Counts shows its four lines and its last line. */
+async function seesScoreCard(page, label) {
+  const card = page.getByTestId('brenda-counts')
+  await card.waitFor()
+  const text = (await card.textContent()).replace(/\s+/g, ' ')
+  for (const want of [
+    'What Brenda Counts',
+    'Green, up to 50: how healthy your grass is.',
+    'Stripes, 2.5 each: a column mown short, fence to patio, with nothing on it at 0:00.',
+    'Tidy, up to 20:',
+    'Junk, no limit: each gnome on your grass costs 1',
+    'Win 2 of 3 rounds. Each round lasts 3 minutes.'
+  ])
+    if (!text.includes(want))
+      throw new Error(`${label}: What Brenda Counts lacks "${want}"`)
+}
+
+/** What has keyboard focus: its role and text, or its test id. */
+const focused = page =>
+  page.evaluate(() => {
+    const el = document.activeElement
+    return `${el?.tagName.toLowerCase()}:${el?.getAttribute('data-testid') ?? el?.textContent?.trim()}`
+  })
+
+/** True when an element sits wholly inside the viewport. */
+async function inView(page, locator) {
+  const box = await locator.boundingBox()
+  const vh = page.viewportSize().height
+  return !!box && box.y >= 0 && box.y + box.height <= vh + 0.5
+}
+
+/**
+ * How to Play by click and by keyboard: it swaps the card for its 13 lines, focuses its
+ * heading, keeps the status line, and Back puts focus back on its button.
+ */
+async function howToPlay(page, status, label) {
+  const open = page.getByRole('button', { name: 'How to Play' })
+  await open.click()
+  await page.getByRole('heading', { name: 'How to Play' }).waitFor()
+  if ((await focused(page)) !== 'h1:How to Play')
+    throw new Error(
+      `${label}: How to Play left focus on ${await focused(page)}`
+    )
+  const lines = await page.getByTestId('how-to-play').locator('li').count()
+  if (lines < 13) throw new Error(`${label}: How to Play shows ${lines} lines`)
+  if (status) await page.getByTestId('lobby-status').getByText(status).waitFor()
+  await shot(page, `lobby-${label}-how-to-play`)
+  await page.getByRole('button', { name: 'Back' }).focus()
+  await page.keyboard.press('Enter')
+  await page.getByRole('heading', { name: 'The Garden Gate' }).waitFor()
+  if ((await focused(page)) !== 'button:How to Play')
+    throw new Error(`${label}: Back left focus on ${await focused(page)}`)
+  // Now by keyboard alone, then Back by click.
+  await page.keyboard.press('Enter')
+  await page.getByRole('heading', { name: 'How to Play' }).waitFor()
+  await page.getByRole('button', { name: 'Back' }).click()
+  await page.getByRole('heading', { name: 'The Garden Gate' }).waitFor()
+  if ((await focused(page)) !== 'button:How to Play')
+    throw new Error(
+      `${label}: Back by click left focus on ${await focused(page)}`
+    )
+}
+
 async function walk(browser, size) {
   const context = await browser.newContext(SIZES[size])
   // On the 390 px phone the clipboard refuses, so the link must show as selectable text.
@@ -61,6 +129,7 @@ async function walk(browser, size) {
   })
   await starter.getByText('Send the link to your neighbour.').waitFor()
   await starter.getByText('Come back here after you send it.').waitFor()
+  await seesScoreCard(starter, `${size} started`)
   await starter.getByRole('button', { name: 'Copy Link' }).click()
   if (copyFails) await starter.getByText(/\/r\/[a-z0-9]{6}\?local/).waitFor()
   else await starter.getByText('Link copied').waitFor()
@@ -80,6 +149,7 @@ async function walk(browser, size) {
   const ef = watchErrors(friend, `${size} friend`)
   await friend.goto(url)
   await waitFor(starter, s => s.seats.length === 2, { label: 'friend seated' })
+  await seesScoreCard(friend, `${size} link`)
   const friendName = (await dev(friend, g => g.state())).me.name
   await waitFor(starter, () => true)
   if (!(await announced(starter)).includes(`${friendName} joined.`))
@@ -97,6 +167,7 @@ async function walk(browser, size) {
   if (!(await readyButton.getAttribute('class')).includes('ready-pulse'))
     throw new Error(`${size}: Ready doesn't pulse`)
   await shot(starter, `lobby-${size}-they-are-ready`)
+  await howToPlay(starter, `${friendName} is ready.`, size)
   // Its name says what a press does, and its description says you're ready, so the two
   // never contradict each other. Read it from the browser's accessibility tree, as a
   // screen reader would.
@@ -146,12 +217,14 @@ async function walk(browser, size) {
   await friend
     .getByText('Waiting for your neighbour. Keep this page open.')
     .waitFor()
+  await seesScoreCard(friend, `${size} link alone`)
   await friend.goto(`${BASE}/?local`)
   await friend.getByRole('button', { name: 'Join With Code' }).click()
   await friend.getByLabel('Room Code').fill(roomCode())
   await friend
     .getByText("Nobody's here yet. Check the code with your friend.")
     .waitFor()
+  await seesScoreCard(friend, `${size} typed`)
   await shot(friend, `lobby-${size}-typed-alone`)
   es.check()
   ef.check()
@@ -161,9 +234,172 @@ async function walk(browser, size) {
   )
 }
 
+/**
+ * On short phones the card scrolls while Ready, How to Play, Leave and the waiting line
+ * stay in view. A countdown that starts while How to Play is open moves focus to the menu
+ * button.
+ */
+async function pinned(browser, size) {
+  const { a, b, context, check } = await localPair(browser, { size })
+  await dev(b, g => g.state())
+  await a.getByRole('button', { name: 'Ready', exact: true }).click()
+  await a.getByTestId('lobby-status').waitFor()
+  const card = a
+    .locator('section')
+    .filter({ has: a.getByTestId('lobby-pinned') })
+  const scrolls = await card.evaluate(el => el.scrollHeight > el.clientHeight)
+  if (size === 'se' && !scrolls)
+    throw new Error(`${size}: the lobby card doesn't scroll`)
+  for (const end of ['top', 'bottom']) {
+    await card.evaluate((el, e) => {
+      el.scrollTop = e === 'top' ? 0 : el.scrollHeight
+    }, end)
+    for (const target of [
+      a.getByRole('button', { name: 'Not Ready' }),
+      a.getByRole('button', { name: 'How to Play' }),
+      a.getByRole('button', { name: 'Leave' }),
+      a.getByTestId('lobby-status')
+    ])
+      if (!(await inView(a, target)))
+        throw new Error(`${size}: ${await target.textContent()} scrolled away`)
+    await shot(a, `lobby-${size}-pinned-${end}`)
+  }
+  // How to Play is open when the countdown starts: focus lands on the menu button.
+  await a.getByRole('button', { name: 'How to Play' }).click()
+  await a.getByRole('heading', { name: 'How to Play' }).waitFor()
+  // B's Ready pulses, so press it through the dev API.
+  await dev(b, g => g.ready(true))
+  await waitFor(a, s => s.phase === 'match', { label: 'countdown' })
+  await a.getByTestId('menu-button').waitFor()
+  await a.waitForTimeout(200)
+  if ((await focused(a)) !== 'button:menu-button')
+    throw new Error(`${size}: the countdown left focus on ${await focused(a)}`)
+  check()
+  await context.close()
+  console.log(
+    `${size}: the card ${scrolls ? 'scrolls' : 'fits'} with its buttons and waiting line pinned, and the countdown focuses the menu button`
+  )
+}
+
+/**
+ * Checks one How to Play view's "More below" cue: it shows while the list's last line sits
+ * below the visible area, and goes once the list is scrolled to its end. `under` is the
+ * element just below the scroll area, whose top ends what you can see. Returns whether
+ * the list ran past the fold.
+ */
+async function checkMoreBelow(page, under, label) {
+  const list = page.getByTestId('how-to-play')
+  const cue = page.getByTestId('more-below')
+  // Fonts and the pop-in settle first.
+  await page.waitForTimeout(400)
+  const measure = () =>
+    list.evaluate((ul, under) => {
+      let scroller = ul.parentElement
+      while (
+        scroller &&
+        !/auto|scroll/.test(getComputedStyle(scroller).overflowY)
+      )
+        scroller = scroller.parentElement
+      const lines = [...ul.querySelectorAll('li')]
+      const thirteenth = lines[12].getBoundingClientRect()
+      const last = lines[lines.length - 1].getBoundingClientRect()
+      const end = Math.min(
+        scroller.getBoundingClientRect().bottom,
+        document.querySelector(under).getBoundingClientRect().top
+      )
+      return {
+        thirteenthOut: thirteenth.bottom > end + 1,
+        lastOut: last.bottom > end + 1,
+        scrollable: scroller.scrollHeight > scroller.clientHeight + 1
+      }
+    }, under)
+  const before = await measure()
+  const shown = await cue.isVisible()
+  if (before.thirteenthOut && !shown)
+    throw new Error(`${label}: line 13 is out of view with no "More below"`)
+  if (!before.lastOut && shown)
+    throw new Error(`${label}: "More below" shows with every line in view`)
+  if (shown) {
+    if ((await cue.textContent()) !== 'More below')
+      throw new Error(`${label}: the cue reads ${await cue.textContent()}`)
+    await page.screenshot({ path: `${SHOTS}/more-${label}-cue.png` })
+  }
+  await list.evaluate(ul => {
+    let scroller = ul.parentElement
+    while (
+      scroller &&
+      !/auto|scroll/.test(getComputedStyle(scroller).overflowY)
+    )
+      scroller = scroller.parentElement
+    scroller.scrollTop = scroller.scrollHeight
+  })
+  await page.waitForTimeout(250)
+  const after = await measure()
+  if (after.lastOut)
+    throw new Error(`${label}: the last line stays out of view at the end`)
+  if (await cue.isVisible())
+    throw new Error(`${label}: "More below" stays once the last line shows`)
+  await page.screenshot({ path: `${SHOTS}/more-${label}-end.png` })
+  return before.lastOut
+}
+
+/**
+ * M41: the lobby's and the menu's How to Play show "More below" while their last line sits
+ * out of view, and drop it at the end; the lobby keeps Back and its status line in view.
+ */
+async function moreBelow(browser, size) {
+  const { a, b, context, check } = await localPair(browser, { size })
+  const peerName = (await dev(b, g => g.state())).me.name
+  await dev(b, g => g.ready(true))
+  await a.getByRole('button', { name: 'How to Play' }).click()
+  await a.getByRole('heading', { name: 'How to Play' }).waitFor()
+  await a
+    .getByTestId('lobby-status')
+    .getByText(`${peerName} is ready.`)
+    .waitFor()
+  const lobbyFolds = await checkMoreBelow(
+    a,
+    '[data-testid="lobby-pinned"]',
+    `${size}-lobby`
+  )
+  for (const target of [
+    a.getByRole('button', { name: 'Back' }),
+    a.getByTestId('lobby-status')
+  ])
+    if (!(await inView(a, target)))
+      throw new Error(`${size}: ${await target.textContent()} scrolled away`)
+  await a.getByRole('button', { name: 'Back' }).click()
+  await a.getByRole('heading', { name: 'The Garden Gate' }).waitFor()
+  await dev(a, g => g.ready(true))
+  await waitFor(a, s => s.matchPhase?.kind === 'play', { label: 'play' })
+  await a.getByTestId('menu-button').click()
+  await a.getByRole('button', { name: 'How to Play' }).click()
+  await a.getByTestId('menu-help').waitFor()
+  // The menu's cue sits on its footer, under the dialog's scroll area.
+  await a.evaluate(() =>
+    document
+      .querySelector('[data-testid="more-below"]')
+      .parentElement.setAttribute('data-more-under', '')
+  )
+  const menuFolds = await checkMoreBelow(a, '[data-more-under]', `${size}-menu`)
+  check()
+  await context.close()
+  console.log(
+    `${size}: How to Play ${lobbyFolds ? 'shows "More below" until its end' : 'fits'} in the lobby, and ${menuFolds ? 'shows it until its end' : 'fits'} in the menu`
+  )
+}
+
+const ONLY = process.argv[2]
 const browser = await launch()
 try {
+  for (const size of ['se', 'bars', 'small', 'phone', 'desktop'])
+    await moreBelow(browser, size)
+  if (ONLY === 'more') {
+    await browser.close()
+    process.exit(0)
+  }
   for (const size of ['desktop', 'phone', 'small']) await walk(browser, size)
+  for (const size of ['se', 'small', 'desktop']) await pinned(browser, size)
 
   // Seats, host and Room Full.
   const { a, b, context, check, url } = await localPair(browser)

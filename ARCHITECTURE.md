@@ -72,7 +72,7 @@ Testing budget: real Pusher tests use the shared daily quota. Keep each real-Pus
 ## Hard Rules
 
 - No database and no game server. The only server code is the Pusher auth route.
-- No game progress is saved. Only your display name and player id may persist in `localStorage`, so you don't retype your name.
+- No game progress is saved. Only three things may persist in `localStorage`: your display name, so you don't retype it; your player id; and one yes/no fact, whether this browser has finished a match. The fact decides who gets a new player's tips (see `DESIGN.md`, Onboarding). It holds no scores and no history.
 - Real-time waits use wall-clock finish times on a clock synced between both players, so they stay correct when a tab sits in the background.
 - Dev-only helpers stay behind `process.env.NODE_ENV !== 'production'`, so production builds never include them.
 - Every action works on desktop (mouse and keyboard) and on phones (touch, with tilt only as an extra). Keep 60 fps on mid-range phones: cache static art, skip resting items in the simulation step, and never re-render React every frame.
@@ -86,8 +86,10 @@ Only in dev builds:
 - `?local` uses the BroadcastChannel transport instead of Pusher.
 - `?fast` shrinks rounds and waits through the shared wait helper.
 - `?debug` draws hit areas, network stats (events per second, message sizes, latency) and other overlays.
+- `?first=1` or `?first=0` makes this tab a new or a returning player, whatever `localStorage` says. Two `?local` tabs share storage, so this is how each can be either.
 - The backquote key toggles a dev panel with cheats.
 - `window.__game` exposes a scripting API so automation can inspect state, step the simulation and drive both players.
+- `window.__game.pause()` and `window.__game.resume()` stop and restart game time on every tab of a `?local` room, and in Practice, for playtests (see `DESIGN.md`, Beginner Playtests).
 
 ## Testing
 

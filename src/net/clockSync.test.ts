@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { matchPhaseAt, matchTimings, playStart } from '../game/match'
 import { ClockSync, sampleOf } from './clockSync'
 
 /** One ping from `guest` at host time `t`, with one-way delays `up` and `down`. */
@@ -50,5 +51,59 @@ describe('ClockSync', () => {
     expect(guest.addResample(sampleOf(0, 100, 200))).toBe(false)
     expect(guest.addResample(sampleOf(0, 80, 140))).toBe(true)
     expect(guest.offset).toBeCloseTo(10)
+  })
+
+  it('stands still through a pause and runs on behind by the paused span', () => {
+    let t = 1_000_000
+    const clock = new ClockSync(() => t)
+    const match = { ...matchTimings(false), at: 1_010_000 }
+    clock.pause(1_050_000)
+    expect(clock.paused).toBe(false)
+    t = 1_050_000
+    expect(clock.paused).toBe(true)
+    const stopped = matchPhaseAt(match, clock.now())
+    for (const later of [1_060_000, 1_080_000, 1_110_000]) {
+      t = later
+      expect(clock.now()).toBe(1_050_000)
+      expect(matchPhaseAt(match, clock.now())).toEqual(stopped)
+    }
+    clock.resume(1_110_000)
+    expect(clock.paused).toBe(false)
+    // Every later phase and round time matches an unpaused run 60s earlier.
+    for (const later of [1_110_000, 1_200_000, 1_300_000, 1_500_000]) {
+      t = later
+      expect(clock.now()).toBe(later - 60_000)
+      expect(matchPhaseAt(match, clock.now())).toEqual(
+        matchPhaseAt(match, later - 60_000)
+      )
+      expect(clock.now() - playStart(match, 1)).toBe(
+        later - 60_000 - playStart(match, 1)
+      )
+    }
+    // Pongs carry the shared clock as it really runs, so a guest's offset ignores pauses.
+    expect(clock.shared()).toBe(1_500_000)
+  })
+
+  it('adds up spans across pauses and ignores a resume before the pause begins', () => {
+    let t = 0
+    const clock = new ClockSync(() => t)
+    clock.pause(1000)
+    clock.resume(500)
+    t = 2000
+    expect(clock.now()).toBe(2000)
+    clock.pause(3000)
+    t = 4000
+    // A resume set for later keeps the clock still until then.
+    clock.resume(5000)
+    expect(clock.now()).toBe(3000)
+    t = 5500
+    expect(clock.now()).toBe(3500)
+    clock.pause(6000)
+    t = 7000
+    expect(clock.now()).toBe(4000)
+    clock.resume(8000)
+    t = 9000
+    expect(clock.now()).toBe(5000)
+    expect(clock.heldMs).toBe(4000)
   })
 })

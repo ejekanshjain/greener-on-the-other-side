@@ -50,7 +50,7 @@ function grab(g: Garden, item: Item): void {
 function drag(g: Garden, item: Item, lx: number, ly: number): GardenEvent[] {
   grab(g, item)
   g.command({ type: 'hold', lx, ly })
-  g.command({ type: 'release', release: { type: 'putDown' } })
+  g.command({ type: 'release', release: { type: 'putDown', reason: 'slow' } })
   return run(g, TICK_MS)
 }
 
@@ -104,7 +104,7 @@ describe('heavy junk', () => {
     grab(g, bin)
     g.command({ type: 'hold', lx: bin.lx, ly: 500 })
     g.command({ type: 'hold', lx: bin.lx, ly: 600 })
-    g.command({ type: 'release', release: { type: 'putDown' } })
+    g.command({ type: 'release', release: { type: 'putDown', reason: 'slow' } })
     const events = run(g, TICK_MS)
     // Columns 2 and 3, rows 11 to 15, once each even though it went back over rows 13 to 15.
     const flat = events.flatMap(e => (e.type === 'flatten' ? [e.patch] : []))
@@ -135,7 +135,7 @@ describe('heavy junk', () => {
     grab(g, bin)
     g.command({ type: 'lift' })
     g.command({ type: 'hold', lx: 300, ly: 300 })
-    g.command({ type: 'release', release: { type: 'putDown' } })
+    g.command({ type: 'release', release: { type: 'putDown', reason: 'slow' } })
     run(g, TICK_MS)
     expect([bin.lx, bin.ly, bin.state]).toEqual([125, 600, 'rest'])
     events = liftAndThrow(g, bin, 1000)

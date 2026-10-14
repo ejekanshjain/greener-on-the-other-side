@@ -13,18 +13,49 @@ describe('releaseRule', () => {
     expect(releaseRule(at60).type).toBe('throw')
   })
 
-  it('puts down slow, off-angle and cancelled releases', () => {
-    expect(releaseRule({ speedPx: 399, dirX: 0, dirY: -1 }).type).toBe(
-      'putDown'
-    )
+  it('puts down slow, off-angle and cancelled releases, saying why', () => {
     const at65 = { speedPx: 900, dirX: Math.sin(1.134), dirY: -Math.cos(1.134) }
-    expect(releaseRule(at65).type).toBe('putDown')
-    expect(releaseRule({ speedPx: 2000, dirX: 0, dirY: 1 }).type).toBe(
-      'putDown'
-    )
-    expect(releaseRule({ speedPx: 2000, dirX: 0, dirY: -1 }, true).type).toBe(
-      'putDown'
-    )
+    expect([
+      releaseRule({ speedPx: 399, dirX: 0, dirY: -1 }),
+      releaseRule(at65),
+      releaseRule({ speedPx: 2000, dirX: 0, dirY: 1 }),
+      releaseRule({ speedPx: 2000, dirX: 0, dirY: -1 }, { cancelled: true }),
+      // A cancelled press says so even when it was slow too.
+      releaseRule({ speedPx: 10, dirX: 0, dirY: 1 }, { cancelled: true })
+    ]).toEqual([
+      { type: 'putDown', reason: 'slow' },
+      { type: 'putDown', reason: 'angle' },
+      { type: 'putDown', reason: 'angle' },
+      { type: 'putDown', reason: 'cancel' },
+      { type: 'putDown', reason: 'cancel' }
+    ])
+  })
+
+  it('names a press held still apart from a slow one, and never stops a throw', () => {
+    const slow = { speedPx: 30, dirX: 0, dirY: -1 }
+    expect([
+      releaseRule(slow, { heldMs: 500, movedPx: 8 }),
+      releaseRule(slow, { heldMs: 500, movedPx: 40 }),
+      // Too short a hold to count as holding still.
+      releaseRule(slow, { heldMs: 300, movedPx: 8 }),
+      releaseRule(
+        { speedPx: 900, dirX: 1, dirY: 0 },
+        { heldMs: 500, movedPx: 8 }
+      ),
+      releaseRule(slow, { heldMs: 500, movedPx: 8, cancelled: true })
+    ]).toEqual([
+      { type: 'putDown', reason: 'still' },
+      { type: 'putDown', reason: 'slow' },
+      { type: 'putDown', reason: 'slow' },
+      { type: 'putDown', reason: 'still' },
+      { type: 'putDown', reason: 'cancel' }
+    ])
+    expect(
+      releaseRule(
+        { speedPx: 900, dirX: 0, dirY: -1 },
+        { heldMs: 500, movedPx: 8 }
+      ).type
+    ).toBe('throw')
   })
 
   it('normalises the throw direction', () => {

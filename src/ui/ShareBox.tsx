@@ -6,10 +6,22 @@ import { Button } from '../shared/ui/Button'
 import { toast } from '../shared/ui/toast'
 import { COPY } from './copy'
 
-/** The room link to send. Dev builds keep test flags such as `?local`. */
+/** Dev flags about this tab's own player, which a friend opening the link must not get. */
+const OWN_FLAGS = ['first', 'pid', 'name', 'bot', 'skew']
+
+/**
+ * The room link to send. Dev builds keep room flags such as `?local`, and drop this tab's
+ * own player flags, such as `?first`.
+ */
 export function roomLink(code: string): string {
-  const query = process.env.NODE_ENV !== 'production' ? location.search : ''
-  return `${location.origin}/r/${code}${query}`
+  const flags =
+    process.env.NODE_ENV !== 'production'
+      ? location.search
+          .slice(1)
+          .split('&')
+          .filter(flag => flag && !OWN_FLAGS.includes(flag.split('=')[0] ?? ''))
+      : []
+  return `${location.origin}/r/${code}${flags.length ? `?${flags.join('&')}` : ''}`
 }
 
 /**

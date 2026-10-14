@@ -22,6 +22,7 @@ import {
   hold,
   launch,
   roomCode,
+  settledBox,
   shot,
   SIZES,
   sleep,
@@ -126,7 +127,8 @@ async function checkBar(page, label, names) {
   const centre = bar.bar.x + bar.bar.w / 2
   if (Math.abs(clock.x + clock.w / 2 - centre) > 1.5)
     fail('the clock is off centre')
-  if (mine.text !== names[0] || theirs.text !== names[1])
+  // Your own tag reads You for everyone; theirs shows their name cut short.
+  if (mine.text !== 'You' || theirs.text !== names[1])
     fail(`names read ${mine.text} and ${theirs.text}`)
   if (mine.clipped || theirs.clipped) fail('a name is clipped')
   const parts = Object.entries(bar.parts).filter(([, r]) => r)
@@ -185,6 +187,28 @@ async function checkPatioLine(page, label, testId) {
   return rect
 }
 
+/**
+ * A new player's tip sits on the fence: its bottom edge on the lawn's top edge, below
+ * the peek strip's top, so it never covers the lawn.
+ */
+async function checkFenceLine(page, label) {
+  const tip = page.locator('[data-testid="tip"]')
+  await tip.waitFor({ timeout: 6000 })
+  // Measure once its pop-in has settled: a new tip can pop in at any moment.
+  const rect = await settledBox(page, '[data-testid="tip"]')
+  const lawnTop = (await designClient(page, 340, 236)).y
+  const peekTop = (await designClient(page, 340, 96)).y
+  if (
+    !rect ||
+    Math.abs(rect.y + rect.height - lawnTop) > 1.5 ||
+    rect.y < peekTop
+  )
+    throw new Error(
+      `${label}: the tip "${await tip.textContent()}" at ${JSON.stringify(rect)} isn't on the fence above ${lawnTop.toFixed(1)}`
+    )
+  return rect
+}
+
 /** Clicks with the mouse on desktop, taps with a finger on phones. */
 function press(page, selector, size) {
   return size === 'desktop' ? page.click(selector) : page.tap(selector)
@@ -204,6 +228,8 @@ async function layout(browser, size) {
 
   const { a, b, check } = await pair(browser, size, 'fast&calm', context)
   await shot(a, `phone-${size}-lobby`)
+  // Show Tips keeps A's own name in the bar but gives it a new player's start tip.
+  await dev(a, g => g.tips(true))
   await dev(a, g => g.ready(true))
   await dev(b, g => g.ready(true))
   await play(a, b)
@@ -211,8 +237,13 @@ async function layout(browser, size) {
   await checkBar(a, `${size} A`, CUT)
   await checkBar(b, `${size} B`, [CUT[1], CUT[0]])
   await checkOpenField(a, size)
-  await checkPatioLine(a, `${size} tip`, 'notice')
+  await checkFenceLine(a, `${size} tip`)
   await shot(a, `phone-${size}-play`)
+  // A toast keeps the strip under the patio props: an empty can's pour.
+  await dev(a, g => g.act.setCan(0))
+  await hold(a, await designClient(a, 340, 236 + 590), 400, size !== 'desktop')
+  await checkPatioLine(a, `${size} toast`, 'toast')
+  await shot(a, `phone-${size}-toast`)
 
   // The menu opens from its button and closes with Keep Playing.
   await press(a, '[data-testid="menu-button"]', size)

@@ -5,6 +5,7 @@
 import {
   BASE,
   dev,
+  frames,
   hold,
   launch,
   mouseFlick,
@@ -30,7 +31,7 @@ async function hostPair(browser, size) {
   const b = await context.newPage()
   const ea = watchErrors(a, 'A')
   const eb = watchErrors(b, 'B')
-  await a.goto(`${BASE}/r/${code}?local&calm&pid=aaaaaaaa77`)
+  await a.goto(`${BASE}/r/${code}?local&calm&pid=aaaaaaaa77&first=1`)
   await waitFor(a, s => s.admission === 'seated')
   await b.goto(`${BASE}/r/${code}?local&calm&pid=zzzzzzzz77`)
   await waitFor(a, s => s.seats.length === 2)
@@ -87,7 +88,9 @@ async function water(browser, size) {
   await dev(a, (g, p) => g.setPatch(p, { health: 5 }), spot.patch)
   const point = await dev(a, (g, s) => g.toClient(s.x, s.y), spot)
   await Promise.all([
-    hold(a, point, 3200, touch),
+    // The pour starts 150 ms into the press and drowns the patch 2.3s later, so it
+    // runs about 450 ms past the drown: 1 health step back, with 330 ms to spare.
+    hold(a, point, 2900, touch),
     sleep(600).then(() => shot(a, `chores-${size}-pouring`))
   ])
   await sleep(200)
@@ -105,11 +108,19 @@ async function water(browser, size) {
     `water ${size}: sparkle ${sparkleMs} ms and drown ${drownMs} ms after the pour started`
   )
   if (Math.abs(sparkleMs - 800) > 120 || Math.abs(drownMs - 2300) > 150)
-    throw new Error(`${size}: pour timings are off`)
+    throw new Error(
+      `${size}: pour timings are off: ${events
+        .filter(e => e.at >= start.at - 3000)
+        .map(e => `${e.type}@${Math.round(e.at - start.at)}`)
+        .join(' ')}`
+    )
   const g = await dev(a, g => g.garden())
-  // The pour went on after the drown, so the mud may have gained 1 health back.
+  // The pour went on after the drown, so the mud may have gained 1 health back. Each step
+  // takes 400 ms of pour.
   if (g.health[spot.patch] > 3 || g.mess[spot.patch] !== 7)
-    throw new Error(`${size}: the drowned patch isn't mud with a puddle`)
+    throw new Error(
+      `${size}: the drowned patch isn't mud with a puddle (health ${g.health[spot.patch]}, mess ${g.mess[spot.patch]})`
+    )
   if (g.blame.drowned < 1) throw new Error(`${size}: drowning wasn't blamed`)
   const notes = events.filter(e => e.type === 'note').map(e => e.detail.text)
   if (!notes.includes('Sparkling means full. Stop pouring.'))
@@ -122,7 +133,7 @@ async function water(browser, size) {
   await sleep(300)
   if (!(await dev(a, g => g.garden().water.tapOn)))
     throw new Error(`${size}: pressing the tap didn't turn it on`)
-  await waitForNotice(a, 'Turn the tap off before it floods.', 6000)
+  await waitForNotice(a, 'Press the tap again within 8s, or it floods.', 6000)
   await shot(a, `chores-${size}-tap`)
   const ranFor = await dev(a, g => g.garden().water.tapRunMs)
   await sleep(8300 - ranFor)
@@ -146,7 +157,7 @@ async function water(browser, size) {
   // An empty can glugs and shows its toast.
   await dev(a, g => g.act.setCan(0))
   await hold(a, point, 500, touch)
-  await waitForNotice(a, "The can's empty. Turn on the tap.", 1000)
+  await waitForNotice(a, "The can's empty. Press the tap to fill it.", 1000)
   await shot(a, `chores-${size}-empty`)
   check()
   await context.close()
@@ -193,6 +204,8 @@ async function mow(browser, size) {
   const at74 = await shortIn(col)
   await dev(a, (g, ms) => g.jump(ms), 180_000 - (after + 76_000))
   await sleep(500)
+  // The jump's catch-up can stall frames for a moment; real presses wait it out.
+  await frames(a)
   const at76 = await shortIn(col)
   console.log(
     `mow ${size}: column ${col} has ${at74} short patches 74s after the rub, ${at76} at 76s`

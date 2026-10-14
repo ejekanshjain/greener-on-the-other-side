@@ -23,6 +23,8 @@ export interface NetFlags {
   bot: string | null
   /** `?name=`: this local tab's display name, so layout checks can pick long names. */
   name: string | null
+  /** `?first=1` or `?first=0`: this tab is a new or a returning player, whatever storage says. */
+  first: boolean | null
   faults: Faults
 }
 
@@ -37,6 +39,7 @@ const OFF: NetFlags = {
   cvd: null,
   bot: null,
   name: null,
+  first: null,
   faults: { lag: 0, jitter: 0, drop: 0, reorder: 0, offline: false }
 }
 
@@ -73,6 +76,12 @@ export function parseNetFlags(search: string): NetFlags {
       ? params.get('bot')
       : null,
     name: name && !nameProblem(name) ? name : null,
+    first:
+      params.get('first') === '1'
+        ? true
+        : params.get('first') === '0'
+          ? false
+          : null,
     faults: {
       lag: num(params, 'lag', 0, 10_000),
       jitter: num(params, 'jitter', 0, 10_000),

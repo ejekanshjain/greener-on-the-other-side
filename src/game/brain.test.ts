@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { Brain } from './brain'
+import { Brain, closingColumn } from './brain'
 import { setPatch } from './cheats'
 import { Garden } from './garden'
+import { patchCenter } from './grid'
 import { PEMBERTON, PLAYERS, type Profile } from './profiles'
-import { COLS, PATCHES } from './tuning'
-import { isHeavy, type GardenEvent } from './types'
+import { COLS, PATCHES, ROWS } from './tuning'
+import { isHeavy, Mess, type GardenEvent } from './types'
 
 /** A windless garden whose grass never dries, so the only drying is what a test feeds the brain. */
 function quietGarden(seed = 4): Garden {
@@ -44,6 +45,41 @@ function exhaust(garden: Garden): void {
   garden.arm.level = 1
   garden.arm.at = garden.t
   garden.arm.lockUntil = garden.t + 60_000
+}
+
+/**
+ * A quiet garden `leftMs` before 0:00 with the shed open: long grass everywhere, no weeds,
+ * snails or gnomes, and only the patio's heavy junk.
+ */
+function lateGarden(leftMs: number, seed = 6): Garden {
+  const garden = quietGarden(seed)
+  garden.advanceTo(garden.endMs - leftMs)
+  garden.drainEvents()
+  garden.weeds.length = 0
+  garden.snails.length = 0
+  const heavy = garden.items.filter(i => isHeavy(i.kind))
+  garden.items.length = 0
+  garden.items.push(...heavy)
+  for (let patch = 0; patch < PATCHES; patch++)
+    setPatch(garden, patch, { length: 2, mess: Mess.none })
+  return garden
+}
+
+/** Puts a hole in the first `n` rows of column `col`. */
+function holes(garden: Garden, col: number, n: number): void {
+  for (let row = 0; row < n; row++)
+    setPatch(garden, row * COLS + col, { hole: 1 })
+}
+
+/** An expert with the thrower's finale: every piece of heavy junk, then the gnomes. */
+const THROWER: Profile = {
+  ...PLAYERS.expert,
+  finale: {
+    ...PLAYERS.expert.finale,
+    junk: true,
+    mower: 'junk',
+    closeMs: 0
+  }
 }
 
 const heavyCross = (e: GardenEvent) =>
@@ -109,7 +145,7 @@ describe('the bot brain', () => {
     garden.drainEvents()
     garden.arm.level = 0.9
     garden.arm.at = garden.t
-    const brain = new Brain(PLAYERS.expert, 4)
+    const brain = new Brain(THROWER, 4)
     expect(play(brain, garden, 1000).some(e => e.type === 'grip')).toBe(false)
     let liftLy = Infinity
     const events: GardenEvent[] = []
@@ -142,5 +178,70 @@ describe('the bot brain', () => {
     expect(events.some(e => e.type === 'clip' && e.clip.kind === 'gnome')).toBe(
       true
     )
+  })
+
+  it("counts only what a mowing pass can't clear as stuck, and picks the safest column to close", () => {
+    const garden = lateGarden(10_000)
+    for (let col = 0; col < COLS; col++) holes(garden, col, 3)
+    // Column 3 holds 2 stuck patches: a hole and a gnome. Column 5 holds 1 hole.
+    for (const col of [3, 5])
+      for (let row = 0; row < 3; row++)
+        setPatch(garden, row * COLS + col, { hole: 0 })
+    setPatch(garden, 3, { hole: 1 })
+    const spot = patchCenter(COLS + 3)
+    garden.place('gnome', spot.lx, spot.ly)
+    setPatch(garden, 5, { hole: 1 })
+    // Slime and long grass clear in one pass, so they never count.
+    setPatch(garden, 4 * COLS + 5, { mess: Mess.slime })
+    const stuck = garden.stuckByColumn()
+    expect([stuck[0], stuck[3], stuck[5]]).toEqual([3, 2, 1])
+    expect(closingColumn(garden)).toBe(5)
+    // Once column 5 stripes, the next safest unstriped column is 3.
+    for (let row = 1; row < ROWS; row++)
+      setPatch(garden, row * COLS + 5, { length: 1, mess: Mess.none })
+    expect((garden.stripes() >> 5) & 1).toBe(1)
+    expect(closingColumn(garden)).toBe(3)
+  })
+
+  it('has a closer mow for stripes before it throws, emptying a full bag first', () => {
+    const garden = lateGarden(10_000)
+    const gnome = garden.place('gnome', 300, 300)
+    garden.mower.bag = 90
+    const brain = new Brain(PLAYERS.expert, 7)
+    const events = play(brain, garden, 6000)
+    const compost = events.findIndex(e => e.type === 'compost')
+    const firstCut = events.findIndex(e => e.type === 'cut')
+    const thrown = events.findIndex(
+      e => e.type === 'throw' && e.id === gnome.id
+    )
+    expect(compost).toBeGreaterThanOrEqual(0)
+    expect(firstCut).toBeGreaterThan(compost)
+    // Its first full pass stripes a column, and the gnome waits.
+    expect(garden.stripes()).not.toBe(0)
+    expect(thrown === -1 || thrown > firstCut).toBe(true)
+  })
+
+  it('has petty Mr Pemberton keep his mower through the junk, then throw it in the last seconds', () => {
+    const garden = lateGarden(30_000, 9)
+    const brain = new Brain(PEMBERTON[2], 8)
+    const crossings: { kind: string; left: number }[] = []
+    let cutsLate = 0
+    const end = garden.endMs
+    while (garden.t < end) {
+      brain.step(garden)
+      garden.advanceTo(Math.min(end, garden.t + 50))
+      const batch = garden.drainEvents()
+      brain.observe(batch)
+      for (const e of batch) {
+        if (heavyCross(e) && e.type === 'cross')
+          crossings.push({ kind: e.crossing.kind, left: end - garden.t })
+        if (e.type === 'cut' && end - garden.t < 15_000) cutsLate++
+      }
+    }
+    const mower = crossings.find(c => c.kind === 'mower')
+    expect(crossings.filter(c => c.kind !== 'mower')).toHaveLength(2)
+    expect(mower?.left).toBeLessThan(6000)
+    expect(mower?.left).toBeGreaterThan(1000)
+    expect(cutsLate).toBeGreaterThanOrEqual(ROWS)
   })
 })

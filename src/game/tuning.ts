@@ -32,6 +32,11 @@ export const LENGTH_MAX = 3
 export const SHORT_MAX = 1
 /** A column shows a stripe once this many of its 16 patches are short and clean. */
 export const STRIPE_MIN = 14
+/**
+ * A mowing press that cuts this many of a column's 16 patches, and leaves it unstriped,
+ * flashes what blocks it.
+ */
+export const BLOCKED_CUTS = 12
 
 // ------------------------------------------------------------------ Round clock
 
@@ -67,6 +72,11 @@ export const FAST_PRESS_PX = 1000
 export const FAST_PRESS_MS = 100
 /** A fast press grabs the nearest item within this many screen pixels. */
 export const SNAP_REACH_PX = 44
+/**
+ * A fast flick that grabs nothing, aimed at the fence with something within this many
+ * screen pixels of the press, earns "Missed." instead of "Too fast to mow."
+ */
+export const MISS_NEAR_PX = 88
 /** A pour turns into mowing once the finger moves faster than this... */
 export const POUR_TO_MOW_PX = 200
 /** ...for this long. */
@@ -145,8 +155,12 @@ export const REACH_TOUCH_PX = 22
 export const REACH_MOUSE_PX = 10
 /** A held item stays within this many units of where you grabbed it, or of its root. */
 export const HOLD_CLAMP = 100
-/** A rooted weed comes out once your finger is this far from its root. */
+/** A rooted weed comes out once your finger is this far from where you pressed it. */
 export const YANK_PULL = 60
+/** Letting go of a light item held this long without moving puts it down as `still`. */
+export const STILL_HOLD_MS = 400
+/** A press that never moves this far from where it started, in screen pixels, held still. */
+export const STILL_MOVE_PX = 12
 
 // ------------------------------------------------------------------ Release
 
@@ -415,3 +429,23 @@ export const BOUNCE_MIN = 40
 export const LAST_TICKS_MS = 10_000
 /** Shake Fist works at most once in this many ms. */
 export const FIST_COOLDOWN_MS = 3000
+
+/** A new player's Ready waits this long after the lobby card shows before it pulses. */
+export const NEW_PLAYER_PULSE_MS = 6000
+
+// ------------------------------------------------------------------ The yard
+
+/** Step 1's gnome stands in the middle of row 8. */
+export const YARD_GNOME_SPOT = { lx: 290, ly: 8 * 40 + 20 } as const
+/** Step 2's weed roots on the back row, 3 columns from the gnome's. */
+export const YARD_WEED_PATCH = 15 * 12 + 8
+/** A step's object resting this close to a hedge counts as stuck against it. */
+export const YARD_HEDGE_GAP = 30
+/** A step's object stuck on the patio or by a hedge goes back to its start after this long. */
+export const YARD_RETURN_MS = 1000
+/** "That's a stripe. Yard done." shows this long before the yard closes. */
+export const YARD_DONE_MS = 2000
+/** In the yard, each failure tip shows this long before the step's line returns. */
+export const YARD_FAILURE_MS = 3000
+/** Failed tries in a row before the ghost finger shows the step's move again. */
+export const YARD_REPLAY_FAILS = 2

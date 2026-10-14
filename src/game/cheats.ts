@@ -48,6 +48,18 @@ export function digSoon(garden: Garden, inMs = 3500): void {
 }
 
 /**
+ * Keeps Biscuit from eyeing, fetching or setting off for another dig for the rest of the
+ * round, so a check can watch other tips. A dig he has already set off for still happens.
+ */
+export function quietDog(garden: Garden): void {
+  const dog = garden.biscuit
+  const digging =
+    dog.state === 'toDig' || dog.state === 'circle' || dog.state === 'dig'
+  ;(garden.digSchedule as number[]).length = dog.nextDig + (digging ? 1 : 0)
+  dog.fetchReadyAt = Infinity
+}
+
+/**
  * A gust in the garden's own frame whose vane swings at the next tick and which blows 2s
  * later. Returns false while another gust is on its way or blowing.
  */

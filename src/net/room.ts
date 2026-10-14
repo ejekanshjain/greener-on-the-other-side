@@ -45,6 +45,10 @@ export interface Peer {
   silentMs: number
   /** True once that silence reaches 3s in play or 6s outside it. */
   away: boolean
+  /** Their last `sync` said they're a new player, so their lobby gate shows First Match. */
+  first: boolean
+  /** The yard step their last lobby `sync` named, 1 to 3, or 0 while their yard is shut. */
+  yard: number
 }
 
 /** How a finished match ended, kept for the match end screen until a rematch or Back to Lobby. */
@@ -134,7 +138,15 @@ export type RoomInput =
   | { type: 'msg'; from: string; msg: Msg }
   | {
       type: 'ui'
-      action: 'ready' | 'unready' | 'rematch' | 'lobby' | 'leave' | 'tryAgain'
+      /** `yard`: the yard step this page sends changed, so the friend's line follows at once. */
+      action:
+        | 'ready'
+        | 'unready'
+        | 'rematch'
+        | 'lobby'
+        | 'leave'
+        | 'tryAgain'
+        | 'yard'
     }
   /** The room's Web Lock: another tab holds it, it was stolen, or you took it with Play Here. */
   | { type: 'lock'; state: 'busy' | 'stolen' | 'taken' }
@@ -195,6 +207,10 @@ export interface RoomEnv {
   peerFinal(round: number): string | null
   /** This page's own final pack for `round` of the current match. */
   myFinal(round: number): string | null
+  /** Whether this page counts as a new player right now; read for each `sync`. */
+  newPlayer(): boolean
+  /** The yard step this page is on, 1 to 3, or 0 while its yard is shut; read for each `sync`. */
+  yardStep(): number
 }
 
 /** Give up on connecting after this long. */
@@ -325,6 +341,22 @@ export function hostSide(state: RoomState): boolean {
   return !!state.over && state.me.id < state.over.peerId
 }
 
+/** Your friend's status line while they try the yard, such as "Sam is trying the yard (2 of 3)." */
+export function yardLine(name: string, step: number): string {
+  return `${name} is trying the yard (${step} of 3).`
+}
+
+/**
+ * The yard step your listed neighbour is on in the lobby, 1 to 3, or 0. It reads 0 once
+ * they press Ready, so "neighbour_name is ready." takes over their status line.
+ */
+export function peerYard(state: RoomState): number {
+  const peer = state.peer
+  if (state.phase !== 'lobby' || !peer?.listed || peer.ready || peer.rematch)
+    return 0
+  return peer.yard
+}
+
 /** True while both seats are taken and the other player is on the member list. */
 export function bothPresent(state: RoomState): boolean {
   return (
@@ -350,6 +382,10 @@ export function syncMsg(state: RoomState, now: number, env: RoomEnv): Msg {
     rematch: state.myRematch,
     phase: state.phase
   }
+  // Read live, so a page that just finished its first match stops saying so at once.
+  if (state.phase !== 'match' && env.newPlayer()) msg.first = true
+  const yard = state.phase === 'lobby' ? env.yardStep() : 0
+  if (yard > 0) msg.yard = yard
   if (state.match && state.phase !== 'lobby' && state.seats.length === 2) {
     const known = knownTally(state)
     msg.match = state.match
@@ -387,6 +423,16 @@ export function syncMsg(state: RoomState, now: number, env: RoomEnv): Msg {
   const need = missingVerdicts(state)
   if (need) msg.need = need
   return msg
+}
+
+/**
+ * True once this page shows the end of a match Brenda decided, including one it rejoined.
+ * That saves the finished-match fact; a walkover, a storm-off or a no contest never does.
+ */
+export function decidedMatchEnd(
+  state: Pick<RoomState, 'phase' | 'over'>
+): boolean {
+  return state.phase === 'over' && state.over?.reason === 'score'
 }
 
 /**
@@ -778,7 +824,9 @@ function onHello(step: Draft, from: string, name: string): void {
         ready: false,
         rematch: false,
         silentMs: 0,
-        away: false
+        away: false,
+        first: false,
+        yard: 0
       }
   } else if (s.seats.length < 2) {
     seat(step, [...s.seats, from], name)
@@ -830,10 +878,14 @@ function onSync(
   followVerdicts(step, from, msg, now, env)
   // Just seated after a reload: your flags and phase go straight back.
   if (wasChecking && s.seats.length === 2) sendSync(step)
-  // A guest still in the lobby lost the start and every sync before play; once play
-  // runs nothing repeats them, so its lobby sync gets the match back.
+  // A guest still in the lobby, or at the end of the last match, lost the start and
+  // every sync before play; once play runs nothing repeats them, so its sync gets the
+  // match back.
   const phase = matchPhase(s, now)
-  if (isHost(s) && msg.phase === 'lobby' && phase && phase.kind !== 'done')
+  const behind =
+    msg.phase === 'lobby' ||
+    (msg.phase === 'over' && msg.match?.id !== s.match?.id)
+  if (isHost(s) && s.phase === 'match' && behind && phase?.kind !== 'done')
     sendSync(step)
   maybeStart(step, now, env)
 }
@@ -993,11 +1045,17 @@ function applyPeerFlags(step: Draft, msg: Extract<Msg, { k: 'sync' }>): void {
       type: 'announce',
       text: `${msg.name} wants a rematch.`
     })
+  const yard = step.state.phase === 'lobby' ? (msg.yard ?? 0) : 0
+  // Screen readers hear each new yard step, until Ready takes over the status line.
+  if (yard > 0 && yard !== peer.yard && !msg.ready)
+    step.effects.push({ type: 'announce', text: yardLine(msg.name, yard) })
   step.state.peer = {
     ...peer,
     name: msg.name,
     ready: msg.ready,
-    rematch: msg.rematch
+    rematch: msg.rematch,
+    first: msg.first === true,
+    yard
   }
 }
 
@@ -1034,6 +1092,9 @@ function onUi(
       s.myReady = false
       s.myRematch = false
       sendSync(step)
+      return
+    case 'yard':
+      if (s.phase === 'lobby' && bothPresent(s)) sendSync(step)
       return
     case 'leave':
       step.out.push({ k: 'leave' })
@@ -1234,7 +1295,9 @@ function startMatch(step: Draft, msg: Extract<Msg, { k: 'start' }>): void {
   s.pendingFinal = null
   s.peerTally = null
   s.peerFinals = []
-  if (s.peer) s.peer = { ...s.peer, ready: false, rematch: false }
+  // Their First Match flag waits for their next lobby sync, which says it afresh.
+  if (s.peer)
+    s.peer = { ...s.peer, ready: false, rematch: false, first: false, yard: 0 }
   step.effects.push({ type: 'matchStarted' })
 }
 
@@ -1282,7 +1345,9 @@ function seat(step: Draft, ids: string[], peerName?: string): void {
       ready: false,
       rematch: false,
       silentMs: 0,
-      away: false
+      away: false,
+      first: false,
+      yard: 0
     }
   } else if (peerId && s.peer && peerName) {
     s.peer = { ...s.peer, name: peerName }

@@ -15,9 +15,9 @@ export type PlaySound = (name: SfxName, options?: PlayOptions) => void
 
 /**
  * The sound map for your own garden's events: a whoosh per throw, thuds and squishes on
- * landings, the clip's creak, pops, the mower's rattle, drips, splashes, sparkles,
- * Biscuit, the vane, the shed and heavy junk. Loops (mowing, pouring, the tap, the wind)
- * follow the garden's state in `SoundLoops` instead.
+ * landings, the clip's creak, pops, the mower's rattle, drips, splashes, a drowned
+ * patch's squish, sparkles, Biscuit, the vane, the shed and heavy junk. Loops (mowing,
+ * pouring, the tap, the wind) follow the garden's state in `SoundLoops` instead.
  */
 export function playEvent(
   event: GardenEvent,
@@ -54,6 +54,8 @@ export function playEvent(
       return play('drip')
     case 'flood':
       return play('splash')
+    case 'drown':
+      return play('squish', { pitch: 0.8 })
     case 'sparkle':
       return play('ding', { pitch: 1.8, volume: 0.35 })
     case 'bark':

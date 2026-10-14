@@ -71,7 +71,7 @@ async function run(browser, size) {
   page.on('websocket', ws => {
     if (!ws.url().includes('/_next/')) pusher.push(ws.url())
   })
-  await page.goto(`${BASE}/practice?fast&calm`)
+  await page.goto(`${BASE}/practice?fast&calm&first=1`)
   await waitFor(page, s => s.admission === 'seated' && s.peer?.listed, {
     label: 'Mr Pemberton seated'
   })
@@ -79,12 +79,20 @@ async function run(browser, size) {
   if (s0.role !== 'host' || s0.peer.name !== 'Mr Pemberton')
     throw new Error(`${size}: practice seats ${JSON.stringify(s0.peer)}`)
   await sleep(300)
+  // What Brenda Counts and How to Play show in Practice's lobby too.
+  const counts = (await page.getByTestId('brenda-counts').textContent()) ?? ''
+  for (const line of ['Green', 'Stripes', 'Tidy', 'Junk', 'Win 2 of 3 rounds.'])
+    if (!counts.includes(line))
+      throw new Error(`${size}: Practice's What Brenda Counts lacks ${line}`)
   await shot(page, `practice-${size}-lobby`)
+  await page.getByRole('button', { name: 'How to Play' }).click()
+  await page.getByTestId('how-to-play').waitFor()
+  await page.getByRole('button', { name: 'Back' }).click()
   const start = 'role=button[name="Start"]'
   if (size === 'desktop') await page.click(start)
   else await page.tap(start)
   await waitFor(page, s => s.matchPhase?.kind === 'play', { label: 'play' })
-  await waitForNotice(page, 'Throw the gnome over the fence.', 6000)
+  await waitForNotice(page, 'Throw the gnomes over the fence.', 6000)
 
   // Three gnomes into his front rows: the begonias, then the fist on the third hit.
   for (const patch of [41, 42, 43]) {

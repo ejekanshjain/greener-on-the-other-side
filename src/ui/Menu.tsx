@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { isTouchDevice } from '../shared/input/pointer'
 import { Button } from '../shared/ui/Button'
 import { Modal } from '../shared/ui/Modal'
 import { SettingsPanel, type SettingControl } from '../shared/ui/SettingsPanel'
 import { COPY } from './copy'
+import { BrendaCounts, HowToPlayLines, MoreBelow } from './HowToPlay'
 
 /** Assist Mode and sensitivity stay off: both players play by the same rules. */
 const CONTROLS: readonly SettingControl[] = ['sound', 'volume', 'reducedMotion']
@@ -19,23 +19,27 @@ const TITLES: Record<View, string> = {
 }
 
 /**
- * The match menu from the top bar's menu button or Escape: Settings, How to Play, Hide
- * Tips and Leave. The round keeps going underneath. Leave hands over to the leave question.
+ * The match menu from the top bar's menu button or Escape: Settings, How to Play, Show
+ * Tips or Hide Tips, and Leave. The round keeps going underneath. Leave hands over to the leave question.
  */
 export function Menu({
   open,
   onClose,
   onLeave,
-  onHideTips
+  tipsOn,
+  onTips
 }: {
   open: boolean
   onClose: () => void
   onLeave: () => void
-  /** Turns tips off until the page reloads; leave it out once they're off. */
-  onHideTips?: () => void
+  /** Whether tips show now, so the button reads Hide Tips or Show Tips. */
+  tipsOn: boolean
+  /** Turns tips off or on until the page reloads. */
+  onTips: () => void
 }) {
   const [view, setView] = useState<View>('menu')
   const body = useRef<HTMLDivElement>(null)
+  const helpList = useRef<HTMLUListElement>(null)
   // Each view opens on its first control, so keyboard focus never drops to the page.
   useEffect(() => {
     if (open) body.current?.querySelector<HTMLElement>('button, input')?.focus()
@@ -49,13 +53,18 @@ export function Menu({
       Back
     </Button>
   )
+  // How to Play's cue sits on the footer's top edge, over the bottom of the scroll area.
+  const footer =
+    view === 'menu' ? undefined : view === 'help' ? (
+      <div className="relative flex w-full justify-end">
+        <MoreBelow list={helpList} />
+        {back}
+      </div>
+    ) : (
+      back
+    )
   return (
-    <Modal
-      open={open}
-      onClose={close}
-      title={TITLES[view]}
-      footer={view === 'menu' ? undefined : back}
-    >
+    <Modal open={open} onClose={close} title={TITLES[view]} footer={footer}>
       <div ref={body} data-testid={`menu-${view}`}>
         {view === 'menu' && (
           <div className="flex flex-col items-stretch gap-3">
@@ -67,17 +76,15 @@ export function Menu({
             <Button variant="ghost" onClick={() => setView('help')}>
               How to Play
             </Button>
-            {onHideTips && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  onHideTips()
-                  close()
-                }}
-              >
-                Hide Tips
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                onTips()
+                close()
+              }}
+            >
+              {tipsOn ? 'Hide Tips' : 'Show Tips'}
+            </Button>
             <Button
               variant="danger"
               onClick={() => {
@@ -93,12 +100,11 @@ export function Menu({
           <SettingsPanel controls={CONTROLS} motionHint={COPY.motionHint} />
         )}
         {view === 'help' && (
-          <ul className="flex list-disc flex-col gap-2 pl-5 text-lg leading-snug">
-            {COPY.howToPlay.map(line => (
-              <li key={line}>{line}</li>
-            ))}
-            {!isTouchDevice() && <li>{COPY.keys}</li>}
-          </ul>
+          <div className="flex flex-col gap-4">
+            <p className="text-lg text-ink-soft">{COPY.menuNote}</p>
+            <HowToPlayLines ref={helpList} className="text-lg" />
+            <BrendaCounts />
+          </div>
         )}
       </div>
     </Modal>
